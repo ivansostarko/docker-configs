@@ -5,14 +5,22 @@ FROM php:${PHP_APACHE_VERSION}-apache
 # Arguments for user
 # ---------------------------
 ARG APP_USER=${APP_USER}
-ARG APP_UID=1000
-ARG APP_GID=1000
+ARG APP_UID=${APP_UID}
+ARG APP_GID=${APP_GID}
 
 
 # ---------------------------
 # Configure timezone
 # ---------------------------
 RUN echo "${TIMEZONE}" > /etc/timezone && dpkg-reconfigure -f noninteractive tzdata
+
+
+# ---------------------------
+# Configure UTF8
+# ---------------------------
+RUN echo "en_US.UTF-8 UTF-8" > /etc/locale.gen  \
+    &&  echo "hr_HR.UTF-8 UTF-8" >> /etc/locale.gen \
+    &&  locale-gen
 
 
 # ---------------------------
@@ -73,6 +81,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN apt-get update -y
 
+# ---------------------------
+# Install Google Page Speed
+# ---------------------------
+RUN wget https://dl-ssl.google.com/dl/linux/direct/mod-pagespeed-stable_current_amd64.deb
+RUN dpkg -i mod-pagespeed-*.deb
+RUN rm mod-pagespeed-*.deb
+RUN sed -i -e 's/ModPagespeed on/ModPagespeed off/g' /etc/apache2/mods-available/pagespeed.conf
+
 
 # ---------------------------
 # Apache Config
@@ -97,7 +113,7 @@ RUN a2enmod cache_socache
 RUN a2enmod deflate
 RUN a2enmod expires
 RUN a2enmod info
-
+RUN a2enmod pagespeed
 
 # ---------------------------
 # Install PECL extensions
@@ -182,20 +198,21 @@ RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local
 # Supervisor configuration
 # ---------------------------
 RUN mkdir -p /etc/supervisor/conf.d
-COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY ./config/supervisord/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
 
 
 # ---------------------------
 # Update default Apache site configuration
 # ---------------------------
-COPY apache-config.conf /etc/apache2/sites-available/000-default.conf
-COPY php.ini /etc/php/${PHP_APACHE_VERSION}/cli/conf.d/php.ini
+COPY /config/apache/000-default.conf /etc/apache2/sites-available/000-default.conf
+COPY ./config/php/php.ini /etc/php/${PHP_APACHE_VERSION}/cli/conf.d/php.ini
 
 
 # ---------------------------
 # Set working directory
 # ---------------------------
-WORKDIR /var/www/html
+WORKDIR ${APACHE_DOCUMENT_ROOT}
 
 
 # ---------------------------
@@ -232,4 +249,3 @@ CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
 
 
 
-#RUN apt-get  ${PHPIZE_DEPS} 
