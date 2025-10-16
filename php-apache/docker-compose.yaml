@@ -1,0 +1,116 @@
+
+services:
+### PHP APACHE ############
+###########################
+  php:
+    build:
+      context: ./
+    #image: ivansostarko/php_8_0_apache:latest
+    #image: ivansostarko/php_8_1_apache:latest
+    #image: ivansostarko/php_8_2_apache:latest
+    #image: ivansostarko/php_8_3_apache:latest
+    container_name: php
+    hostname: php
+    env_file:
+      - .env
+    stdin_open: true
+    tty: true
+    restart: always
+    logging:
+      driver: gelf
+      options:
+        gelf-address: "${PHP_LOGSTASH_ADDRESS}"
+        project: "${PHP_LOG_PROJECT}"
+        environment: "${PHP_LOG_ENV}"
+      configs:
+        - source: php_config
+          target: /usr/local/etc/php/conf.d/php.ini
+        - source: apache_config
+          target: /usr/local/etc/php/conf.d/php.ini          
+        - source: php_supervisord_config
+          target: /etc/supervisor/supervisord.conf
+
+      volumes:
+        - ${PHP_DEPLOYMENT_PATH_CORE_SERVICE}:/var/www/html
+
+
+
+
+        - php-admin-supervisord:/etc/supervisor/logs
+
+      # - ./php_8_2_apache/php.ini:/usr/local/etc/php/conf.d/php.ini
+      # - ./php_8_2_apache/supervisord.conf:/etc/supervisor/supervisord.conf
+
+      ports:
+        - ${PHP_ADMIN_APP_PORT:-1200}:80
+        - ${PHP_ADMIN_APP_PORT:-1200}:443
+        - ${PHP_ADMIN_SUPERVISOR_PORT:-9020}:9045
+      environment:
+        - APACHE_DOCUMENT_ROOT=${APACHE_DOCUMENT_ROOT}
+      links:
+     #   - mysql-db
+      networks:
+        - development
+      labels:
+        project: "${LOG_PROJECT}"
+        environment: "${LOG_ENVIRONMENT}"
+        app: "php"
+        tag: "development"
+      deploy:
+        mode: 'replicated'
+        replicas: 1
+        restart_policy:
+          condition: on-failure
+          delay: 5s
+          max_attempts: 3
+          window: 120s
+        resources:
+          limits:
+            cpus: '${LIMIT_CPU}'
+            memory: ${LIMIT_RAM}
+        placement:
+          constraints:
+            - node.role == ${NODE_ROLE}
+            - node.hostname == ${NODE_HOSTNAME}
+      healthcheck:
+        test: ["CMD", "curl", "-f", "http://127.0.0.1:80"]
+        interval: 30s
+        timeout: 10s
+        retries: 3
+        start_period: 10s
+
+
+
+
+######## NETWORK ###############
+networks:
+  development:
+    driver: bridge #overlay
+    #attachable: true
+    #internal: false
+    #driver_opts:
+    #  encrypted: "true"
+
+
+######## VOLUMES ###############
+volumes:
+  php-admin-supervisord:
+    driver: local
+    driver_opts:
+      type: none
+      device: ${PHP_ADMIN_SUPERVISOR_LOG}
+      o: bind
+
+######## CONFIGS ###############
+configs:
+  php_config:
+    file: ./php_8_2_apache/php.ini #/usr/local/etc/php/conf.d/php.ini
+    name: php_config
+
+  php_supervisord_config:
+    file: ./php_8_2_apache/supervisord.conf #/etc/supervisor/supervisord.conf
+    name: php_supervisord_config
+
+  apache_config:
+    file: ./php_8_2_apache/supervisord.conf #/etc/supervisor/supervisord.conf
+    name: php_supervisord_config
