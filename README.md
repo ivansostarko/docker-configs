@@ -78,6 +78,7 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 
 ### Networks and VPN
 - [CoreDNS](/coredns/README.md)
+- [HaProxy](/haproxy/README.md)
 - [Wireguard](/wireguard/README.md)
 - [Tor](/tor/README.md)
 
