@@ -1,0 +1,133 @@
+services:
+  redis:
+    image: redis:7.2-alpine
+    container_name: redis
+    hostname: redis
+    restart: unless-stopped
+
+    # If you do NOT need host access, delete the 'ports:' section entirely.
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+
+    environment:
+      TZ: ${TZ:-Europe/Zagreb}
+
+    # Config is read-only; mutable state lives in /data (volume).
+    volumes:
+      - redis_data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - ./redis/users.acl.template:/usr/local/etc/redis/users.acl.template:ro
+      - ./redis/docker-entrypoint.sh:/usr/local/bin/docker-entrypoint.sh:ro
+
+    secrets:
+      - redis_password
+
+    entrypoint: ["/bin/sh", "/usr/local/bin/docker-entrypoint.sh"]
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$(cat /run/secrets/redis_password)\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
+    # Practical kernel/network tuning for Redis
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+
+    sysctls:
+      net.core.somaxconn: "1024"
+
+    # Hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    networks:
+      - app_net
+
+  redis_exporter:
+    image: oliver006/redis_exporter:v1.63.0
+    container_name: redis_exporter
+    hostname: redis-exporter
+    restart: unless-stopped
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    environment:
+      TZ: ${TZ:-Europe/Zagreb}
+      REDIS_ADDR: "redis://redis:6379"
+      REDIS_PASSWORD_FILE: "/run/secrets/redis_password"
+
+    secrets:
+      - redis_password
+
+    ports:
+      - "${REDIS_EXPORTER_PORT:-9121}:9121"
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9121/metrics >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+    networks:
+      - app_net
+      - monitoring_net
+
+  # Optional: local Prometheus (enable with: docker compose --profile monitoring up -d)
+  prometheus:
+    image: prom/prometheus:v2.53.1
+    container_name: prometheus
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    networks:
+      - monitoring_net
+
+  # Optional: local Grafana (enable with: docker compose --profile monitoring up -d)
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: grafana
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    environment:
+      TZ: ${TZ:-Europe/Zagreb}
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me}
+    volumes:
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - monitoring_net
+
+networks:
+  app_net:
+    driver: bridge
+  monitoring_net:
+    driver: bridge
+
+volumes:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+
+secrets:
+  redis_password:
+    file: ./secrets/redis_password.txt

@@ -1,0 +1,6 @@
+# Full access user (default). Password is injected at container start.
+user default on >__REDIS_PASSWORD__ ~* +@all
+
+# Example: read-only user for dashboards/limited apps (same password by default).
+# Change to a different secret if you want separation (recommended).
+user readonly on >__REDIS_PASSWORD__ ~* +@read +ping +info +client|id +config|get

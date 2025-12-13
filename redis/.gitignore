@@ -1,0 +1,5 @@
+# Secrets
+secrets/redis_password.txt
+
+# Local volumes (if you bind-mount later)
+data/
