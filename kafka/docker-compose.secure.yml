@@ -1,0 +1,41 @@
+version: "3.9"
+
+secrets:
+  kafka_server_jaas:
+    file: ./secrets/kafka_server_jaas.conf
+  kafka_client_username:
+    file: ./secrets/kafka_client_username.txt
+  kafka_client_password:
+    file: ./secrets/kafka_client_password.txt
+
+services:
+  kafka:
+    secrets:
+      - kafka_server_jaas
+    environment:
+      # Switch client listener protocols to SASL_PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:SASL_PLAINTEXT,PLAINTEXT_HOST:SASL_PLAINTEXT,CONTROLLER:PLAINTEXT"
+      KAFKA_SASL_ENABLED_MECHANISMS: "PLAIN"
+      KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL: "PLAIN"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+
+      # Point JVM at JAAS (broker reads KafkaServer section from this file)
+      KAFKA_OPTS: >-
+        -Djava.security.auth.login.config=/run/secrets/kafka_server_jaas
+        -javaagent:/opt/jmx/jmx_prometheus_javaagent.jar=9404:/etc/jmx/kafka-jmx.yml
+
+  kafka-exporter:
+    secrets:
+      - kafka_client_username
+      - kafka_client_password
+    entrypoint: ["/bin/sh", "-ec"]
+    command: >
+      USER="$(cat /run/secrets/kafka_client_username)";
+      PASS="$(cat /run/secrets/kafka_client_password)";
+      exec /kafka_exporter
+        --kafka.server=kafka:29092
+        --web.listen-address=:9308
+        --sasl.enabled
+        --sasl.username="$USER"
+        --sasl.password="$PASS"
+        --sasl.mechanism=plain

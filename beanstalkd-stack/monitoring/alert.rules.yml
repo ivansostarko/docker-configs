@@ -1,0 +1,20 @@
+groups:
+  - name: beanstalkd.rules
+    rules:
+      - alert: BeanstalkdExporterDown
+        expr: up{job="beanstalkd_exporter"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Beanstalkd exporter is down"
+          description: "Prometheus cannot scrape beanstalkd_exporter for 2 minutes."
+
+      - alert: BeanstalkdNotUp
+        expr: beanstalkd_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Beanstalkd is not reachable by exporter"
+          description: "Exporter reports beanstalkd_up == 0 for 2 minutes."

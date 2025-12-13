@@ -1,0 +1,21 @@
+# syntax=docker/dockerfile:1.7
+FROM ghcr.io/cirruslabs/flutter:stable
+
+# Keep image deterministic(ish)
+WORKDIR /workspace
+
+# Install minimal tools used by scripts
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl git bash \
+    && rm -rf /var/lib/apt/lists/*
+
+# Optional: speed up web build by pre-caching artifacts
+RUN flutter config --enable-web && \
+    flutter precache --web
+
+# Copy helper script (the actual source is bind-mounted at runtime)
+COPY ./docker/flutter/build-web.sh /docker/build-web.sh
+RUN chmod +x /docker/build-web.sh
+
+ENTRYPOINT ["/bin/bash","-lc"]
+CMD ["/docker/build-web.sh"]

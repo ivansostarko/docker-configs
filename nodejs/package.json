@@ -1,0 +1,14 @@
+{
+  "name": "nodejs-stack-sample",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal Node.js app with /healthz and /metrics for Docker Compose templates",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "prom-client": "^15.1.3"
+  }
+}

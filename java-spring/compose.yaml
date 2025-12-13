@@ -1,0 +1,301 @@
+name: spring-stack
+
+services:
+  # =========================
+  # Spring Boot Application
+  # =========================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: spring-app:local
+    container_name: spring_app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Spring profile & config
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-docker}
+      SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/opt/app/config/"
+
+      # Ports
+      SERVER_PORT: ${APP_PORT:-8080}
+      MANAGEMENT_SERVER_PORT: ${MANAGEMENT_PORT:-8081}
+
+      # Database
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-appdb}
+      DB_USER: ${POSTGRES_USER:-appuser}
+      DB_PASSWORD_FILE: /run/secrets/postgres_password
+
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+      # App secrets
+      APP_JWT_SECRET_FILE: /run/secrets/app_jwt_secret
+      APP_ADMIN_PASSWORD_FILE: /run/secrets/app_admin_password
+
+      # Actuator / Prometheus
+      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,prometheus"
+      MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED: "true"
+
+      # Tracing (optional)
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-spring-app}
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+      OTEL_TRACES_EXPORTER: "otlp"
+      OTEL_METRICS_EXPORTER: "none"   # use /actuator/prometheus
+      OTEL_LOGS_EXPORTER: "none"
+
+    secrets:
+      - postgres_password
+      - app_jwt_secret
+      - app_admin_password
+
+    volumes:
+      - ./config:/opt/app/config:ro
+      - app_tmp:/tmp
+
+    ports:
+      - "${APP_HTTP_PORT:-8080}:${APP_PORT:-8080}"        # app traffic
+      - "${APP_MGMT_PORT:-8081}:${MANAGEMENT_PORT:-8081}" # actuator / metrics
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+
+    networks:
+      - app_net
+      - monitoring
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:${MANAGEMENT_PORT:-8081}/actuator/health/readiness | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 25s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run
+    cap_drop:
+      - ALL
+    pids_limit: 200
+
+  # =========================
+  # PostgreSQL
+  # =========================
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-appdb}
+      POSTGRES_USER: ${POSTGRES_USER:-appuser}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-appuser} -d ${POSTGRES_DB:-appdb} -h localhost"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # =========================
+  # Redis
+  # =========================
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # =========================
+  # Optional: RabbitMQ (profile "messaging")
+  # =========================
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    profiles: ["messaging"]
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-app}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-app}
+    ports:
+      - "${RABBITMQ_AMQP_PORT:-5672}:5672"
+      - "${RABBITMQ_HTTP_PORT:-15672}:15672"
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  # =========================
+  # Prometheus
+  # =========================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    networks:
+      - monitoring
+
+  # =========================
+  # Grafana
+  # =========================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    secrets:
+      - grafana_admin_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    networks:
+      - monitoring
+    depends_on:
+      - prometheus
+
+  # =========================
+  # Loki + Promtail (logs)
+  # =========================
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - loki_data:/loki
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    networks:
+      - monitoring
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/promtail.yml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: ["-config.file=/etc/promtail/config.yml"]
+    networks:
+      - monitoring
+    depends_on:
+      - loki
+
+  # =========================
+  # OpenTelemetry Collector + Optional Jaeger (profile "tracing")
+  # =========================
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otel_collector
+    restart: unless-stopped
+    command: ["--config=/etc/otel/otel-collector.yml"]
+    volumes:
+      - ./monitoring/otel-collector.yml:/etc/otel/otel-collector.yml:ro
+    ports:
+      - "${OTEL_GRPC_PORT:-4317}:4317"
+      - "${OTEL_HTTP_PORT:-4318}:4318"
+    networks:
+      - monitoring
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: jaeger
+    profiles: ["tracing"]
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"
+    networks:
+      - monitoring
+
+networks:
+  app_net:
+    driver: bridge
+    name: spring_app_net
+  monitoring:
+    driver: bridge
+    name: spring_monitoring
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+  app_tmp:
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  app_jwt_secret:
+    file: ./secrets/app_jwt_secret.txt
+  app_admin_password:
+    file: ./secrets/app_admin_password.txt
+  grafana_admin_password:
+    file: ./secrets/app_admin_password.txt

@@ -1,0 +1,9 @@
+# Local env
+.env
+
+# Secrets (never commit)
+secrets/
+
+# Backups
+backup/
+*.tar.gz

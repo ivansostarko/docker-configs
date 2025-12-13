@@ -1,0 +1,149 @@
+version: "3.9"
+
+name: rabbitmq-stack
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: rabbitmq
+    hostname: rabbitmq
+    restart: unless-stopped
+
+    env_file:
+      - ./.env
+
+    # We use a wrapper entrypoint to safely load Docker secrets into env vars
+    # and to install the Erlang cookie with correct permissions.
+    entrypoint: ["/bin/bash", "/usr/local/bin/custom-entrypoint.sh"]
+
+    environment:
+      # Explicit nodename prevents surprises when you later scale or migrate.
+      RABBITMQ_NODENAME: ${RABBITMQ_NODENAME:-rabbit@rabbitmq}
+      RABBITMQ_USE_LONGNAME: "true"
+      # Optional: keep log noise controlled (tune as needed).
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "-rabbit log_levels [{connection,info},{default,info}]"
+      # Default user is taken from .env; password is injected from secret by entrypoint.
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-admin}
+
+    ports:
+      - "${RABBITMQ_AMQP_PORT:-5672}:5672"     # AMQP
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672" # Management UI/API
+      - "${RABBITMQ_PROMETHEUS_PORT:-15692}:15692" # Prometheus metrics
+
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - rabbitmq_logs:/var/log/rabbitmq
+
+      # RabbitMQ configuration (text-based config + plugins list + definitions)
+      - ./config/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./config/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - ./config/definitions.json:/etc/rabbitmq/definitions.json:ro
+
+      # Custom wrapper entrypoint
+      - ./scripts/entrypoint.sh:/usr/local/bin/custom-entrypoint.sh:ro
+
+    secrets:
+      - rabbitmq_erlang_cookie
+      - rabbitmq_admin_password
+
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+    networks:
+      - rabbitmq_net
+      - monitoring_net
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: prometheus
+    restart: unless-stopped
+
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+    networks:
+      - monitoring_net
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: grafana
+    restart: unless-stopped
+
+    env_file:
+      - ./.env
+
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+    depends_on:
+      prometheus:
+        condition: service_started
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q 'ok' || exit 1"]
+      interval: 15s
+      timeout: 8s
+      retries: 20
+      start_period: 30s
+
+    networks:
+      - monitoring_net
+
+networks:
+  rabbitmq_net:
+    name: rabbitmq_net
+    driver: bridge
+  monitoring_net:
+    name: monitoring_net
+    driver: bridge
+
+volumes:
+  rabbitmq_data:
+    name: rabbitmq_data
+  rabbitmq_logs:
+    name: rabbitmq_logs
+  prometheus_data:
+    name: prometheus_data
+  grafana_data:
+    name: grafana_data
+
+secrets:
+  # IMPORTANT: Replace these files with real secrets before using outside a dev machine.
+  rabbitmq_erlang_cookie:
+    file: ./secrets/erlang.cookie
+  rabbitmq_admin_password:
+    file: ./secrets/admin_password

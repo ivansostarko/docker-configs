@@ -1,0 +1,8 @@
+{
+  "logLevel": "info",
+  "trustProxy": true,
+  "metrics": {
+    "enabled": true,
+    "path": "/metrics"
+  }
+}

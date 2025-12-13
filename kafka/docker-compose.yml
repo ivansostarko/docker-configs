@@ -1,0 +1,202 @@
+version: "3.9"
+
+name: kafka-stack
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+networks:
+  kafka_net:
+    name: kafka_net
+    driver: bridge
+  monitoring:
+    name: monitoring
+    driver: bridge
+
+volumes:
+  kafka_data:
+  jmx_agent:
+  prometheus_data:
+  grafana_data:
+
+services:
+  # ------------------------------------------------------------
+  # One-shot init: download JMX exporter javaagent into a volume
+  # ------------------------------------------------------------
+  jmx-init:
+    image: curlimages/curl:8.10.1
+    container_name: kafka_jmx_init
+    command: >
+      sh -ec '
+        mkdir -p /jmx &&
+        if [ ! -f /jmx/jmx_prometheus_javaagent.jar ]; then
+          echo "Downloading jmx_prometheus_javaagent 1.0.1..." &&
+          curl -fsSL
+            -o /jmx/jmx_prometheus_javaagent.jar
+            https://repo.maven.apache.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/1.0.1/jmx_prometheus_javaagent-1.0.1.jar;
+        fi
+      '
+    volumes:
+      - jmx_agent:/jmx
+    networks:
+      - monitoring
+    restart: "no"
+    logging: *default-logging
+
+  # -------------------------
+  # Kafka (KRaft, single node)
+  # -------------------------
+  kafka:
+    image: ${KAFKA_IMAGE:-apache/kafka:4.1.1}
+    container_name: kafka
+    hostname: kafka
+    depends_on:
+      jmx-init:
+        condition: service_completed_successfully
+    ports:
+      # External client access from host
+      - "${KAFKA_EXTERNAL_PORT:-9092}:9092"
+    environment:
+      # KRaft required knobs (single-node combined mode)
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:29093"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+
+      # Listeners: internal (container network) + external (host)
+      KAFKA_LISTENERS: "PLAINTEXT://kafka:29092,CONTROLLER://kafka:29093,PLAINTEXT_HOST://0.0.0.0:9092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:29092,PLAINTEXT_HOST://${KAFKA_ADVERTISED_HOST:-localhost}:${KAFKA_EXTERNAL_PORT:-9092}"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+
+      # Single-node safe defaults
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+
+      # Persistence
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+
+      # Hardening-ish defaults (adjust to your needs)
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_NUM_PARTITIONS: "${KAFKA_NUM_PARTITIONS:-3}"
+      KAFKA_LOG_RETENTION_HOURS: "${KAFKA_LOG_RETENTION_HOURS:-168}"
+      KAFKA_LOG_SEGMENT_BYTES: "${KAFKA_LOG_SEGMENT_BYTES:-1073741824}"
+
+      # KRaft cluster id (must be stable across restarts)
+      CLUSTER_ID: "${KAFKA_CLUSTER_ID:?Set KAFKA_CLUSTER_ID in .env (see .env.example)}"
+
+      # JMX exporter javaagent (scrape on :9404/metrics)
+      KAFKA_OPTS: >-
+        -javaagent:/opt/jmx/jmx_prometheus_javaagent.jar=9404:/etc/jmx/kafka-jmx.yml
+
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+      - jmx_agent:/opt/jmx:ro
+      - ./monitoring/jmx/kafka-jmx.yml:/etc/jmx/kafka-jmx.yml:ro
+
+    networks:
+      - kafka_net
+      - monitoring
+
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec 'timeout 5 bash -c "</dev/tcp/127.0.0.1/29092"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 25s
+
+    restart: unless-stopped
+    logging: *default-logging
+
+  # ------------------------------------------------------------
+  # Kafka exporter (Prometheus) - consumer group / topic metrics
+  # ------------------------------------------------------------
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.9.0
+    container_name: kafka_exporter
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command:
+      - "--kafka.server=kafka:29092"
+      - "--web.listen-address=:9308"
+    ports:
+      - "${KAFKA_EXPORTER_PORT:-9308}:9308"
+    networks:
+      - kafka_net
+      - monitoring
+    restart: unless-stopped
+    logging: *default-logging
+
+  # -------------------------
+  # Kafka UI (optional)
+  # -------------------------
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka_ui
+    profiles: ["ui"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      DYNAMIC_CONFIG_ENABLED: "true"
+      KAFKA_CLUSTERS_0_NAME: "${KAFKA_UI_CLUSTER_NAME:-local}"
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "kafka:29092"
+    ports:
+      - "${KAFKA_UI_PORT:-8080}:8080"
+    networks:
+      - kafka_net
+    restart: unless-stopped
+    logging: *default-logging
+
+  # -------------------------
+  # Prometheus (optional)
+  # -------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    profiles: ["monitoring"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-exporter:
+        condition: service_started
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    volumes:
+      - prometheus_data:/prometheus
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    networks:
+      - monitoring
+    restart: unless-stopped
+    logging: *default-logging
+
+  # -------------------------
+  # Grafana (optional)
+  # -------------------------
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    profiles: ["monitoring"]
+    depends_on:
+      prometheus:
+        condition: service_started
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-admin}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    networks:
+      - monitoring
+    restart: unless-stopped
+    logging: *default-logging

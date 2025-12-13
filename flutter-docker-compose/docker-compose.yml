@@ -1,0 +1,208 @@
+name: flutter-stack
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-common-env: &common-env
+  TZ: ${TZ:-Europe/Zagreb}
+
+x-healthcheck-defaults: &hc
+  interval: 10s
+  timeout: 3s
+  retries: 12
+  start_period: 20s
+
+networks:
+  app_net:
+    driver: bridge
+  monitoring:
+    driver: bridge
+
+volumes:
+  flutter_pub_cache:
+  web_build:
+  nginx_cache:
+  prometheus_data:
+  grafana_data:
+
+secrets:
+  # Optional: for private pub packages / enterprise pub, provide a credentials.json
+  # See README for how to generate it (usually lives under ~/.pub-cache/credentials.json)
+  pub_credentials_json:
+    file: ./secrets/pub_credentials.json
+
+services:
+  # =========================
+  # Flutter (dev) - hot reload via web-server device
+  # =========================
+  flutter_dev:
+    image: ghcr.io/cirruslabs/flutter:stable
+    container_name: flutter_dev
+    restart: unless-stopped
+    profiles: ["dev"]
+    working_dir: /workspace
+    environment:
+      <<: [*common-env]
+      PUB_CACHE: /home/flutter/.pub-cache
+      FLUTTER_WEB_PORT: ${FLUTTER_WEB_PORT:-8080}
+      FLUTTER_WEB_HOST: 0.0.0.0
+      # Common knobs you might want in CI/dev:
+      # FLUTTER_ANALYTICS: "false"
+      # CI: "true"
+    volumes:
+      - ./:/workspace:cached
+      - flutter_pub_cache:/home/flutter/.pub-cache
+    ports:
+      - "${FLUTTER_WEB_PORT:-8080}:${FLUTTER_WEB_PORT:-8080}"
+    networks:
+      - app_net
+    # Copy pub credentials into cache if provided (no-op if file missing/empty)
+    secrets:
+      - pub_credentials_json
+    entrypoint: ["/bin/bash","-lc"]
+    command:
+      - |
+        set -euo pipefail
+        if [ -s /run/secrets/pub_credentials_json ]; then
+          mkdir -p "${PUB_CACHE}"
+          cp -f /run/secrets/pub_credentials_json "${PUB_CACHE}/credentials.json"
+          chmod 600 "${PUB_CACHE}/credentials.json" || true
+        fi
+        flutter --version
+        flutter pub get
+        flutter run -d web-server --web-hostname="${FLUTTER_WEB_HOST}" --web-port="${FLUTTER_WEB_PORT}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${FLUTTER_WEB_PORT:-8080}/ >/dev/null 2>&1 || exit 1"]
+      <<: *hc
+    logging: *default-logging
+
+  # =========================
+  # Flutter (build) - produces a release web build into named volume `web_build`
+  # Run on demand:
+  #   docker compose --profile build run --rm flutter_builder
+  # =========================
+  flutter_builder:
+    build:
+      context: .
+      dockerfile: ./docker/flutter/Dockerfile.web
+    container_name: flutter_builder
+    profiles: ["build", "prod"]
+    working_dir: /workspace
+    environment:
+      <<: [*common-env]
+      PUB_CACHE: /home/flutter/.pub-cache
+      FLUTTER_WEB_BASE_HREF: ${FLUTTER_WEB_BASE_HREF:-/}
+    volumes:
+      - ./:/workspace:ro
+      - flutter_pub_cache:/home/flutter/.pub-cache
+      - web_build:/output
+    secrets:
+      - pub_credentials_json
+    networks:
+      - app_net
+    entrypoint: ["/bin/bash","-lc"]
+    command: ["/workspace/docker/flutter/build-web.sh"]
+    logging: *default-logging
+
+  # =========================
+  # NGINX (prod) - serves `web_build` + exposes /stub_status for metrics
+  # =========================
+  flutter_web:
+    image: nginx:1.27-alpine
+    container_name: flutter_web
+    restart: unless-stopped
+    profiles: ["prod"]
+    depends_on:
+      flutter_builder:
+        condition: service_completed_successfully
+    ports:
+      - "${WEB_HTTP_PORT:-8081}:80"
+    volumes:
+      - web_build:/usr/share/nginx/html:ro
+      - nginx_cache:/var/cache/nginx
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    networks:
+      - app_net
+      - monitoring
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1"]
+      <<: *hc
+    logging: *default-logging
+
+  # =========================
+  # NGINX Prometheus Exporter
+  # =========================
+  nginx_exporter:
+    image: nginx/nginx-prometheus-exporter:1.5.1
+    container_name: nginx_exporter
+    restart: unless-stopped
+    profiles: ["monitoring", "prod"]
+    command:
+      - --nginx.scrape-uri=http://flutter_web/stub_status
+    networks:
+      - monitoring
+      - app_net
+    depends_on:
+      flutter_web:
+        condition: service_healthy
+    ports:
+      - "${NGINX_EXPORTER_PORT:-9113}:9113"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9113/metrics >/dev/null 2>&1 || exit 1"]
+      <<: *hc
+    logging: *default-logging
+
+  # =========================
+  # Prometheus
+  # =========================
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: prometheus
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    volumes:
+      - prometheus_data:/prometheus
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - monitoring
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/ready >/dev/null 2>&1 || exit 1"]
+      <<: *hc
+    logging: *default-logging
+
+  # =========================
+  # Grafana
+  # =========================
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: grafana
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    environment:
+      <<: [*common-env]
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - monitoring
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null 2>&1 || exit 1"]
+      <<: *hc
+    logging: *default-logging

@@ -1,0 +1,9 @@
+# Secrets (do not commit real credentials)
+secrets/*.txt
+secrets/*.conf
+
+# Local env
+.env
+
+# Data volumes (not used directly but kept for safety)
+data/

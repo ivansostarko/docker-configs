@@ -1,0 +1,248 @@
+name: nodejs-stack
+
+services:
+  # =========================
+  # Node.js application
+  # =========================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NODE_VERSION: "20"
+    image: nodejs-stack-app:local
+    container_name: nodejs_app
+    restart: unless-stopped
+
+    # Loads non-secret env values
+    env_file:
+      - .env
+
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: ${APP_PORT:-3000}
+
+      # Optional dependencies (only if you enable the profiles)
+      DATABASE_HOST: ${DATABASE_HOST:-postgres}
+      DATABASE_PORT: ${DATABASE_PORT:-5432}
+      DATABASE_NAME: ${DATABASE_NAME:-appdb}
+      DATABASE_USER: ${DATABASE_USER:-appuser}
+
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+
+      # Config + secrets are mounted as files
+      APP_CONFIG_PATH: /app/config/app.config.json
+      DB_PASSWORD_FILE: /run/secrets/db_password
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+
+    configs:
+      - source: app_config
+        target: /app/config/app.config.json
+        mode: 0444
+
+    secrets:
+      - db_password
+      - jwt_secret
+
+    ports:
+      - "${APP_PORT:-3000}:3000"
+
+    networks:
+      - app_net
+      - monitoring
+
+    volumes:
+      - app_data:/app/data
+
+    # If your app does not implement /healthz, the container will be marked unhealthy.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+    # Hardening (adjust if your app needs write access beyond /tmp or /app/data)
+    user: "node"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    init: true
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    # NOTE: 'deploy:' limits are honored in Swarm; Docker Compose support varies by runtime.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+
+  # =========================
+  # Postgres (optional)
+  # Enable with: --profile db
+  # =========================
+  postgres:
+    image: postgres:16-alpine
+    container_name: nodejs_postgres
+    restart: unless-stopped
+    profiles: ["db"]
+
+    environment:
+      POSTGRES_DB: ${DATABASE_NAME:-appdb}
+      POSTGRES_USER: ${DATABASE_USER:-appuser}
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+
+    secrets:
+      - db_password
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    networks:
+      - app_net
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-appuser} -d ${DATABASE_NAME:-appdb} -h 127.0.0.1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+
+  # =========================
+  # Redis (optional)
+  # Enable with: --profile cache
+  # =========================
+  redis:
+    image: redis:7-alpine
+    container_name: nodejs_redis
+    restart: unless-stopped
+    profiles: ["cache"]
+
+    command: ["redis-server", "--appendonly", "yes"]
+
+    volumes:
+      - redis_data:/data
+
+    networks:
+      - app_net
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  # =========================
+  # Prometheus (optional)
+  # Enable with: --profile monitoring
+  # =========================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: nodejs_prometheus
+    restart: unless-stopped
+    profiles: ["monitoring"]
+
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+
+    volumes:
+      - prometheus_data:/prometheus
+
+    configs:
+      - source: prometheus_config
+        target: /etc/prometheus/prometheus.yml
+        mode: 0444
+
+    ports:
+      - "9090:9090"
+
+    networks:
+      - monitoring
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/healthy >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+
+  # =========================
+  # Grafana (optional)
+  # Enable with: --profile monitoring
+  # =========================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: nodejs_grafana
+    restart: unless-stopped
+    profiles: ["monitoring"]
+
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+    ports:
+      - "3001:3000"
+
+    networks:
+      - monitoring
+
+    depends_on:
+      prometheus:
+        condition: service_healthy
+
+# =========================
+# Networks
+# =========================
+networks:
+  app_net:
+    driver: bridge
+    internal: true
+  monitoring:
+    driver: bridge
+
+# =========================
+# Volumes
+# =========================
+volumes:
+  app_data:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+
+# =========================
+# Configs (non-secret)
+# =========================
+configs:
+  app_config:
+    file: ./config/app.config.json
+  prometheus_config:
+    file: ./prometheus/prometheus.yml
+
+# =========================
+# Secrets (secret material)
+# =========================
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+  jwt_secret:
+    file: ./secrets/jwt_secret.txt

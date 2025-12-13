@@ -1,0 +1,208 @@
+name: keycloak-stack
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: keycloak_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${KC_DB_NAME}
+      POSTGRES_USER: ${KC_DB_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+
+  keycloak:
+    build:
+      context: ./keycloak
+      args:
+        KEYCLOAK_VERSION: ${KEYCLOAK_VERSION}
+    image: local/keycloak:${KEYCLOAK_VERSION}
+    container_name: keycloak
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    # Main HTTP interface: 8080
+    # Management interface (metrics/health): 9000 (NOT published by default)
+    ports:
+      - "${KC_HTTP_PUBLISH_ADDR:-127.0.0.1}:${KC_HTTP_PUBLISH_PORT:-8080}:8080"
+
+    environment:
+      # Admin bootstrap (password comes from docker secret via entrypoint.sh)
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+
+      # Database
+      KC_DB: postgres
+      KC_DB_URL_HOST: postgres
+      KC_DB_URL_PORT: 5432
+      KC_DB_URL_DATABASE: ${KC_DB_NAME}
+      KC_DB_USERNAME: ${KC_DB_USER}
+
+      # HTTP (edge TLS termination recommended)
+      KC_HTTP_ENABLED: "true"
+      KC_HTTP_PORT: "8080"
+
+      # Hostname / proxy (set these correctly or you'll create redirect/origin-check problems)
+      KC_HOSTNAME: ${KC_HOSTNAME}
+      KC_HOSTNAME_STRICT: ${KC_HOSTNAME_STRICT}
+      KC_PROXY_HEADERS: ${KC_PROXY_HEADERS}
+      KC_PROXY_TRUSTED_ADDRESSES: ${KC_PROXY_TRUSTED_ADDRESSES}
+
+      # Observability
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_HTTP_MANAGEMENT_PORT: "9000"
+      KC_HTTP_MANAGEMENT_HEALTH_ENABLED: "true"  # keep /health on mgmt port
+      # KC_HTTP_MANAGEMENT_RELATIVE_PATH: "/management"  # optional hardening
+
+      # Logging
+      KC_LOG_LEVEL: ${KC_LOG_LEVEL}
+
+    # Secrets mounted; entrypoint reads them and exports *_PASSWORD env vars
+    secrets:
+      - keycloak_admin_password
+      - postgres_password
+
+    volumes:
+      - ./keycloak/conf/keycloak.conf:/opt/keycloak/conf/keycloak.conf:ro
+      - ./keycloak/import:/opt/keycloak/data/import:ro
+      - keycloak_data:/opt/keycloak/data
+
+    networks:
+      - frontend
+      - backend
+      - monitoring
+
+    # Healthcheck hits management port (9000) where /health is exposed by default
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/health/ready > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 40s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+
+    # Conservative defaults; raise if you run real traffic
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+        reservations:
+          memory: 512m
+
+  # Optional reverse proxy (TLS termination, headers)
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: keycloak_nginx
+    restart: unless-stopped
+    profiles: ["proxy"]
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      # - "443:443"  # if you mount certs and enable TLS server block
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      # - ./nginx/certs:/etc/nginx/certs:ro
+    networks:
+      - frontend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Optional Postgres exporter (profile: monitoring)
+  postgres_exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.16.0
+    container_name: postgres_exporter
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # exporter supports DATA_SOURCE_NAME; we provide a DSN file via secret
+      DATA_SOURCE_NAME_FILE: /run/secrets/postgres_exporter_dsn
+    secrets:
+      - postgres_exporter_dsn
+    networks:
+      - monitoring
+    expose:
+      - "9187"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9187/metrics > /dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+
+  # Optional Prometheus (profile: monitoring)
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: prometheus
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - monitoring
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/ready > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+networks:
+  frontend:
+    name: keycloak_frontend
+  backend:
+    name: keycloak_backend
+    internal: true
+  monitoring:
+    name: keycloak_monitoring
+    internal: true
+
+volumes:
+  postgres_data:
+  keycloak_data:
+  prometheus_data:
+
+secrets:
+  keycloak_admin_password:
+    file: ./secrets/keycloak_admin_password.txt
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+
+  # monitoring secret: full DSN including password (only used when profile=monitoring)
+  postgres_exporter_dsn:
+    file: ./secrets/postgres_exporter_dsn.txt
