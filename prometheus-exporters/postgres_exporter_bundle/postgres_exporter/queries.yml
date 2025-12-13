@@ -1,0 +1,16 @@
+# Add your own SQL here. Keep it minimal and justified.
+# Bad queries = slow queries = exporter harming your DB.
+
+# Example metric (toy example)
+pg_database_size_bytes:
+  query: |
+    SELECT datname, pg_database_size(datname) AS size_bytes
+    FROM pg_database
+    WHERE datistemplate = false;
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - size_bytes:
+        usage: "GAUGE"
+        description: "Database size in bytes"

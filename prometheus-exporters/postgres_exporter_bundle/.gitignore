@@ -1,0 +1,9 @@
+# local env
+.env
+
+# secrets
+secrets/*.txt
+!secrets/*.example
+
+# misc
+.DS_Store
