@@ -1,0 +1,7 @@
+# Secrets must never be committed
+secrets/*.txt
+.env
+
+# Local state
+*.log
+.DS_Store

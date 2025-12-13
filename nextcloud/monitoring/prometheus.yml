@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: nextcloud_exporter
+    static_configs:
+      - targets: ["nextcloud-exporter:9205"]
+
+  - job_name: postgres_exporter
+    static_configs:
+      - targets: ["nextcloud-postgres-exporter:9187"]
+
+  - job_name: redis_exporter
+    static_configs:
+      - targets: ["nextcloud-redis-exporter:9121"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["prometheus:9090"]

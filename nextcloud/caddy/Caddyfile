@@ -1,0 +1,34 @@
+\
+{
+  email {$ACME_EMAIL}
+  admin 127.0.0.1:2019
+}
+
+:80 {
+  respond /health 200
+}
+
+{$DOMAIN} {
+  encode zstd gzip
+
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "SAMEORIGIN"
+    Referrer-Policy "no-referrer"
+    Permissions-Policy "geolocation=(), microphone=(), camera=()"
+  }
+
+  redir /.well-known/carddav /remote.php/dav 301
+  redir /.well-known/caldav /remote.php/dav 301
+
+  reverse_proxy nextcloud:80 {
+    header_up Host {host}
+    header_up X-Real-IP {remote}
+    header_up X-Forwarded-For {remote}
+    header_up X-Forwarded-Proto {scheme}
+  }
+
+  @forbidden path /data/* /config/* /lib/* /3rdparty/* /templates/* /occ
+  respond @forbidden 404
+}

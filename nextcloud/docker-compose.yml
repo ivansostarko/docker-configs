@@ -1,0 +1,282 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: nextcloud-caddy
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    environment:
+      TZ: ${TZ}
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - frontend
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: nextcloud-postgres
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+
+  redis:
+    image: redis:7-alpine
+    container_name: nextcloud-redis
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - |
+        redis-server --appendonly yes --requirepass "$$(cat /run/secrets/redis_password)"
+    secrets:
+      - redis_password
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", 'redis-cli -a "$$(cat /run/secrets/redis_password)" ping | grep -q PONG']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+
+  nextcloud:
+    image: nextcloud:32.0.2-apache
+    container_name: nextcloud-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ}
+
+      # Bootstrap admin (only used on first install)
+      NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER}
+      NEXTCLOUD_ADMIN_PASSWORD_FILE: /run/secrets/nextcloud_admin_password
+
+      # DB
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+
+      # Redis (locking/caching)
+      REDIS_HOST: redis
+      REDIS_HOST_PASSWORD_FILE: /run/secrets/redis_password
+
+      # Reverse proxy correctness
+      NEXTCLOUD_TRUSTED_DOMAINS: ${DOMAIN}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES}
+      OVERWRITEPROTOCOL: https
+      OVERWRITECLIURL: https://${DOMAIN}
+
+      # PHP sizing
+      PHP_MEMORY_LIMIT: ${PHP_MEMORY_LIMIT}
+      UPLOAD_MAX_SIZE: ${UPLOAD_MAX_SIZE}
+
+      # Logging
+      LOG_LEVEL: ${NEXTCLOUD_LOG_LEVEL}
+    secrets:
+      - postgres_password
+      - redis_password
+      - nextcloud_admin_password
+    volumes:
+      - nextcloud_html:/var/www/html
+      - nextcloud_data:/var/www/html/data
+      - ./nextcloud/php-custom.ini:/usr/local/etc/php/conf.d/zzz-custom.ini:ro
+      - ./nextcloud/opcache.ini:/usr/local/etc/php/conf.d/zzz-opcache.ini:ro
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "php -r 'echo @file_get_contents("http://127.0.0.1/status.php") ? "OK" : "FAIL";' | grep -q OK"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+
+  cron:
+    image: nextcloud:32.0.2-apache
+    container_name: nextcloud-cron
+    restart: unless-stopped
+    depends_on:
+      nextcloud:
+        condition: service_healthy
+    entrypoint: /cron.sh
+    environment:
+      TZ: ${TZ}
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      REDIS_HOST: redis
+      REDIS_HOST_PASSWORD_FILE: /run/secrets/redis_password
+    secrets:
+      - postgres_password
+      - redis_password
+    volumes:
+      - nextcloud_html:/var/www/html
+      - nextcloud_data:/var/www/html/data
+    networks:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+
+  # Optional monitoring stack (enable with: docker compose --profile monitoring up -d)
+  nextcloud_exporter:
+    image: xperimental/nextcloud-exporter:latest
+    container_name: nextcloud-exporter
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    environment:
+      NEXTCLOUD_SERVER: https://${DOMAIN}
+      NEXTCLOUD_USERNAME: ${NEXTCLOUD_EXPORTER_USER}
+      NEXTCLOUD_PASSWORD_FILE: /run/secrets/nextcloud_exporter_token
+      NEXTCLOUD_INSECURE_SKIP_VERIFY: "false"
+    secrets:
+      - nextcloud_exporter_token
+    networks:
+      - backend
+    depends_on:
+      nextcloud:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9205/metrics | grep -q nextcloud_"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+
+  postgres_exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: nextcloud-postgres-exporter
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER}:$$(cat /run/secrets/postgres_password)@postgres:5432/${POSTGRES_DB}?sslmode=disable
+    secrets:
+      - postgres_password
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+
+  redis_exporter:
+    image: oliver006/redis_exporter:v1.63.0
+    container_name: nextcloud-redis-exporter
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    command:
+      - "--redis.addr=redis://redis:6379"
+      - "--redis.password=$$(cat /run/secrets/redis_password)"
+    secrets:
+      - redis_password
+    networks:
+      - backend
+    depends_on:
+      redis:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: nextcloud-prometheus
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+
+  grafana:
+    image: grafana/grafana:11.2.2
+    container_name: nextcloud-grafana
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD_FILE: /run/secrets/grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    secrets:
+      - grafana_admin_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    networks:
+      - backend
+    depends_on:
+      prometheus:
+        condition: service_started
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  frontend:
+    name: ${COMPOSE_PROJECT_NAME:-nextcloud}_frontend
+  backend:
+    name: ${COMPOSE_PROJECT_NAME:-nextcloud}_backend
+    internal: true
+
+volumes:
+  caddy_data:
+  caddy_config:
+  postgres_data:
+  redis_data:
+  nextcloud_html:
+  nextcloud_data:
+  prometheus_data:
+  grafana_data:
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  nextcloud_admin_password:
+    file: ./secrets/nextcloud_admin_password.txt
+  redis_password:
+    file: ./secrets/redis_password.txt
+  nextcloud_exporter_token:
+    file: ./secrets/nextcloud_exporter_token.txt
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password.txt

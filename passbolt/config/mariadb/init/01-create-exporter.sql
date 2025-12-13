@@ -1,0 +1,1 @@
+-- Deprecated: exporter user is created by 00-create-exporter-user.sh

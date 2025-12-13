@@ -1,0 +1,9 @@
+# Never commit secrets
+secrets/*
+!secrets/.keep
+
+# Local env
+.env
+
+# Grafana local state (if you bind-mount)
+# grafana_data/

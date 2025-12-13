@@ -116,38 +116,26 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 | Service       | Exporter       | Grafana Dashboard | Alert Manager | Prometheus Job | fdf |
 | ------------- |:-------------:|:-------------:|:-------------:|:-------------:|:-------------:|
 | Coturn        | [Coturn Exporter](/prometheus-exporters/coturn-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
-| left bar      | [MySql Exporter](/prometheus-exporters/mysqld-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
-| left baz      | [Node Exporter](/prometheus-exporters/node-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
-| left bar      | [Ollama Exporter](/prometheus-exporters/ollama-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
-| left baz      | [Postgres Exporter](/prometheus-exporters/postgres-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
-| left bar      | [Wireguard Exporter](/prometheus-exporters/wireguard-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
-| left baz      | [Cloudflare Exporter](/prometheus-exporters/wireguard-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
-| left bar      | right bar     | left foo      | right foo     | left foo      | right foo     |
-| left baz      | right baz     | left foo      | right foo     | left foo      | right foo     |
-| left bar      | right bar     | left foo      | right foo     | left foo      | right foo     |
-| left baz      | right baz     | left foo      | right foo     | left foo      | right foo     |
-| left bar      | right bar     | left foo      | right foo     | left foo      | right foo     |
-| left baz      | right baz     | left foo      | right foo     | left foo      | right foo     |
-| left bar      | right bar     | left foo      | right foo     | left foo      | right foo     |
-| left baz      | right baz     | left foo      | right foo     | left foo      | right foo     |
-| left bar      | right bar     | left foo      | right foo     | left foo      | right foo     |
+| MySql      | [MySql Exporter](/prometheus-exporters/mysqld-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| Node Exporter      | [Node Exporter](/prometheus-exporters/node-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| Ollama      | [Ollama Exporter](/prometheus-exporters/ollama-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| Postgres      | [Postgres Exporter](/prometheus-exporters/postgres-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| Wireguard      | [Wireguard Exporter](/prometheus-exporters/wireguard-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| Gluster      | [Gluster Exporter](/prometheus-exporters/gluster-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| Elasticsearch      | [Elasticsearch Exporter](/prometheus-exporters/elasticsearch-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| Cloudflare      | [Cloudflare Exporter](/prometheus-exporters/cloudflare-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| Redis      | [Redis Exporter](/prometheus-exporters/redis-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| Rabbitmq      | [Rabbitmq Exporter](/prometheus-exporters/rabbitmq-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| Nginx      | [Nginx Exporter](/prometheus-exporters/nginx-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| Mysqld      | [Mysqld Exporter](/prometheus-exporters/mysqld-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| MongoDB      | [MongoDB Exporter](/prometheus-exporters/mongodb-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| Logstash      | [Logstash Exporter](/prometheus-exporters/logstash-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| Kibana      | [Kibana Exporter](/prometheus-exporters/kibana-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| Kafka      | [Kafka Exporter](/prometheus-exporters/kafka-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| Certbot      | [Certbot Exporter](/prometheus-exporters/certbot-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| Apache      | [Apache Exporter](/prometheus-exporters/apache-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
 | left baz      | right baz     | left foo      | right foo     | left foo      | right foo     |
 
-
-
-- [Gluster Exporter](/prometheus-exporters/gluster-exporter/README.md)
-- [Elasticsearch Exporter](/prometheus-exporters/elasticsearch-exporter/README.md)
-- [Cloudflare Exporter](/prometheus-exporters/cloudflare-exporter/README.md)
-- [Redis Exporter](/prometheus-exporters/redis-exporter/README.md)
-- [Rabbitmq Exporter](/prometheus-exporters/rabbitmq-exporter/README.md)
-- [Nginx Exporter](/prometheus-exporters/nginx-exporter/README.md)
-- [Mysqld Exporter](/prometheus-exporters/mysqld-exporter/README.md)
-- [MongoDB Exporter](/prometheus-exporters/mongodb-exporter/README.md)
-- [Logstash Exporter](/prometheus-exporters/logstash-exporter/README.md)
-- [Kibana Exporter](/prometheus-exporters/kibana-exporter/README.md)
-- [Kafka Exporter](/prometheus-exporters/kafka-exporter/README.md)
-- [Certbot Exporter](/prometheus-exporters/certbot-exporter/README.md)
-- [Apache Exporter](/prometheus-exporters/apache-exporter/README.md)
 
 
 ## Prerequisites
