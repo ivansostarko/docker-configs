@@ -42,8 +42,10 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [MySql Replication](/mysql-replication/README.md)
 - [Postgres Replication](/postgres-replication/README.md)
 - [Redis Sentiel](/redis-sentinel/README.md)
+- [Elasticsearch Replication](/elasticsearch-replication/README.md)
 
-### Logs
+
+### Logging & Log Management
 - [Kibana](/kibana/README.md)
 - [Logstash](/logstash/README.md)
 
@@ -64,7 +66,7 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [Adminer](/adminer/README.md)
 - [pgadmin](/pgadmin/README.md)
 
-### Collaboration Tools
+### Incident Management & Collaboration
 - [Mattermost](/mattermost/README.md)
 
 ### Error Management
@@ -75,20 +77,33 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [Grafana](/grafana/README.md)
 - [Alert Manager](/alert-manager/README.md)
 
-### Git / CI CD
+### Observability
+- [Jaeger](/jaeger/README.md)
+- [OpenTelemetry](/OpenTelemetry/README.md)
+ 
+
+### Git
 - [Gitea](/gitea/README.md)
 - [Gitlab](/gitlab/README.md)
+
+### Continuous Integration / Continuous Delivery (CI/CD)
 - [Jenkins](/jenkins/README.md)
 
 ### Networks 
 - [CoreDNS](/coredns/README.md)
 - [HAProxy](/haproxy/README.md)
+- [CoreDNS](/coredns/README.md)
+- [Traefik](/traefik/README.md)
+- 
+
+### TLS 
+- [Certbot](/certbot/README.md)
 
 ### VPN
 - [Wireguard](/wireguard/README.md)
 - [Tor](/tor/README.md)
 
-### Repositories
+### Package Management
 - [fdroid-repo](/fdroid-repo/README.md)
 
 ### Email
@@ -111,7 +126,7 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [Beanstalkd](/beanstalkd/README.md)
 - [RabbitMq](/rabbitmq/README.md)
 
-### Security
+### Secrets Management
 - [Infisical](/infisical/README.md)
 
 ### Auth

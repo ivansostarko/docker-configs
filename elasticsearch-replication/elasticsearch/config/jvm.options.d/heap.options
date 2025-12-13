@@ -1,0 +1,4 @@
+# Heap settings override (ES_JAVA_OPTS also works; this is explicit and visible)
+# If both are set, ES_JAVA_OPTS typically wins.
+-Xms1g
+-Xmx1g

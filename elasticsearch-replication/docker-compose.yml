@@ -1,0 +1,247 @@
+name: elastic-replica
+
+services:
+  # One-shot init container: generates a CA + per-node certs used for HTTP + transport TLS.
+  # Re-runs are idempotent (it will skip if certs already exist).
+  es-setup:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELK_VERSION}
+    container_name: es-setup
+    user: "0:0"
+    volumes:
+      - es-certs:/certs
+      - ./elasticsearch/scripts/es-setup.sh:/usr/local/bin/es-setup.sh:ro
+    environment:
+      TZ: ${TZ}
+    command: ["/bin/bash","-lc","/usr/local/bin/es-setup.sh"]
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /certs/.ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+    networks:
+      - elastic
+
+  es01:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELK_VERSION}
+    container_name: es01
+    hostname: es01
+    depends_on:
+      es-setup:
+        condition: service_healthy
+    ports:
+      - "${ES_HTTP_PORT}:9200"
+      - "${ES_TRANSPORT_PORT}:9300"
+    volumes:
+      - es01-data:/usr/share/elasticsearch/data
+      - es-certs:/usr/share/elasticsearch/config/certs:ro
+      - ./elasticsearch/config/es01.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+      - ./elasticsearch/config/jvm.options.d/heap.options:/usr/share/elasticsearch/config/jvm.options.d/heap.options:ro
+    secrets:
+      - elastic_password
+    environment:
+      TZ: ${TZ}
+      ES_JAVA_OPTS: ${ES_JAVA_OPTS}
+      # Read elastic superuser bootstrap password from a Docker secret
+      ELASTIC_PASSWORD_FILE: /run/secrets/elastic_password
+      # Optional: harden
+      bootstrap.memory_lock: "true"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test: ["CMD-SHELL", "bash -lc 'PASS=$(cat /run/secrets/elastic_password); curl -sS --fail --cacert /usr/share/elasticsearch/config/certs/ca/ca.crt -u elastic:${PASS} https://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s > /dev/null'"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 60s
+    networks:
+      - elastic
+
+  es02:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELK_VERSION}
+    container_name: es02
+    hostname: es02
+    depends_on:
+      es-setup:
+        condition: service_healthy
+    volumes:
+      - es02-data:/usr/share/elasticsearch/data
+      - es-certs:/usr/share/elasticsearch/config/certs:ro
+      - ./elasticsearch/config/es02.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+      - ./elasticsearch/config/jvm.options.d/heap.options:/usr/share/elasticsearch/config/jvm.options.d/heap.options:ro
+    secrets:
+      - elastic_password
+    environment:
+      TZ: ${TZ}
+      ES_JAVA_OPTS: ${ES_JAVA_OPTS}
+      ELASTIC_PASSWORD_FILE: /run/secrets/elastic_password
+      bootstrap.memory_lock: "true"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test: ["CMD-SHELL", "bash -lc 'PASS=$(cat /run/secrets/elastic_password); curl -sS --fail --cacert /usr/share/elasticsearch/config/certs/ca/ca.crt -u elastic:${PASS} https://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s > /dev/null'"]
+      interval: 20s
+      timeout: 10s
+      retries: 40
+      start_period: 60s
+    networks:
+      - elastic
+
+  es03:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELK_VERSION}
+    container_name: es03
+    hostname: es03
+    depends_on:
+      es-setup:
+        condition: service_healthy
+    volumes:
+      - es03-data:/usr/share/elasticsearch/data
+      - es-certs:/usr/share/elasticsearch/config/certs:ro
+      - ./elasticsearch/config/es03.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+      - ./elasticsearch/config/jvm.options.d/heap.options:/usr/share/elasticsearch/config/jvm.options.d/heap.options:ro
+    secrets:
+      - elastic_password
+    environment:
+      TZ: ${TZ}
+      ES_JAVA_OPTS: ${ES_JAVA_OPTS}
+      ELASTIC_PASSWORD_FILE: /run/secrets/elastic_password
+      bootstrap.memory_lock: "true"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test: ["CMD-SHELL", "bash -lc 'PASS=$(cat /run/secrets/elastic_password); curl -sS --fail --cacert /usr/share/elasticsearch/config/certs/ca/ca.crt -u elastic:${PASS} https://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s > /dev/null'"]
+      interval: 20s
+      timeout: 10s
+      retries: 40
+      start_period: 60s
+    networks:
+      - elastic
+
+  # Prometheus exporter for Elasticsearch (scrapes ES APIs and exposes /metrics)
+  es-exporter:
+    image: prom/prometheus:v2.54.1
+    container_name: es-exporter
+    # NOTE: this service is intentionally a tiny sidecar that runs a single binary.
+    # We use the prom image only as a stable base for curl + certs in many environments.
+    # If you prefer a dedicated exporter image, swap this to:
+    #   quay.io/prometheuscommunity/elasticsearch-exporter:latest
+    # and adjust the command accordingly.
+    depends_on:
+      es01:
+        condition: service_healthy
+    volumes:
+      - es-certs:/certs:ro
+      - ./prometheus/es-exporter.sh:/usr/local/bin/es-exporter.sh:ro
+    secrets:
+      - elastic_password
+    environment:
+      TZ: ${TZ}
+      ES_URI: "https://es01:9200"
+      ES_CA: "/certs/ca/ca.crt"
+      ES_USER: "elastic"
+      ES_PASS_FILE: "/run/secrets/elastic_password"
+      EXPORTER_PORT: "9114"
+    command: ["/bin/sh","-lc","/usr/local/bin/es-exporter.sh"]
+    ports:
+      - "${ES_EXPORTER_PORT}:9114"
+    networks:
+      - elastic
+      - observability
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9114/metrics >/dev/null 2>&1"]
+      interval: 20s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: prometheus
+    depends_on:
+      es-exporter:
+        condition: service_healthy
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+    volumes:
+      - prometheus-data:/prometheus
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=${PROMETHEUS_RETENTION}"
+    environment:
+      TZ: ${TZ}
+    networks:
+      - observability
+      - elastic
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/ready >/dev/null 2>&1"]
+      interval: 20s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  grafana:
+    image: grafana/grafana:${GRAFANA_VERSION}
+    container_name: grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning/datasources/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
+    environment:
+      TZ: ${TZ}
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    networks:
+      - observability
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q '\"database\":\"ok\"'"]
+      interval: 20s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+networks:
+  elastic:
+    name: elastic_net
+    driver: bridge
+  observability:
+    name: observability_net
+    driver: bridge
+
+volumes:
+  es-certs:
+    name: es_certs
+  es01-data:
+    name: es01_data
+  es02-data:
+    name: es02_data
+  es03-data:
+    name: es03_data
+  prometheus-data:
+    name: prometheus_data
+  grafana-data:
+    name: grafana_data
+
+secrets:
+  elastic_password:
+    file: ./secrets/elastic_password.txt

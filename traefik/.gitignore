@@ -1,0 +1,10 @@
+# Secrets (keep placeholders only)
+secrets/*.htpasswd
+secrets/*.txt
+
+# Local overrides
+.env.local
+
+# Logs / runtime
+*.log
+traefik/letsencrypt/*

@@ -1,0 +1,165 @@
+version: "3.9"
+
+name: traefik-stack
+
+networks:
+  traefik-public:
+    name: traefik-public
+    driver: bridge
+  traefik-internal:
+    name: traefik-internal
+    driver: bridge
+    internal: true
+  monitoring:
+    name: monitoring
+    driver: bridge
+
+volumes:
+  traefik_letsencrypt:
+  traefik_logs:
+  prometheus_data:
+  grafana_data:
+
+secrets:
+  traefik_dashboard_users:
+    file: ./secrets/traefik_dashboard_users.htpasswd
+  # Optional: DNS provider token (Cloudflare example). Only needed for DNS-01.
+  cf_dns_api_token:
+    file: ./secrets/cf_dns_api_token.txt
+
+services:
+  # Safer alternative to mounting /var/run/docker.sock into Traefik.
+  # Traefik connects to this proxy instead.
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    container_name: socket-proxy
+    restart: unless-stopped
+    networks:
+      - traefik-internal
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      # Allow only what Traefik needs:
+      LOG_LEVEL: warning
+      CONTAINERS: "1"
+      SERVICES: "1"
+      TASKS: "1"
+      NETWORKS: "1"
+      # Everything else remains disabled (0 by default)
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:2375/version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  traefik:
+    image: traefik:v2.11
+    container_name: traefik
+    restart: unless-stopped
+    depends_on:
+      - socket-proxy
+    networks:
+      - traefik-public
+      - traefik-internal
+      - monitoring
+    ports:
+      - "${TRAEFIK_HTTP_PORT}:80"
+      - "${TRAEFIK_HTTPS_PORT}:443"
+    environment:
+      TZ: "${TZ}"
+      # Point Docker provider to socket-proxy (NOT the raw docker socket)
+      DOCKER_HOST: "tcp://socket-proxy:2375"
+
+      # Optional DNS-01 (Cloudflare example). Traefik reads this if you enable DNS challenge in traefik.yml.
+      # For Cloudflare: CF_DNS_API_TOKEN is the recommended token name for lego/traefik.
+      CF_DNS_API_TOKEN_FILE: "/run/secrets/cf_dns_api_token"
+    secrets:
+      - traefik_dashboard_users
+      - cf_dns_api_token
+    volumes:
+      # Static + dynamic configuration
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+
+      # ACME storage (certs)
+      - traefik_letsencrypt:/letsencrypt
+
+      # Logs
+      - traefik_logs:/var/log/traefik
+    healthcheck:
+      # Traefik includes a native healthcheck command
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+    labels:
+      # Expose Traefik dashboard securely via HTTPS + basic auth.
+      - "traefik.enable=true"
+
+      # Router for dashboard
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`${TRAEFIK_DASHBOARD_HOST}`)"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
+      - "traefik.http.routers.traefik-dashboard.tls=true"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+
+      # Middlewares from file provider (defined in traefik/dynamic/middlewares.yml)
+      - "traefik.http.routers.traefik-dashboard.middlewares=dashboard-auth@file,security-headers@file"
+      # Optional: restrict dashboard to office/VPN IPs only
+      # - "traefik.http.routers.traefik-dashboard.middlewares=dashboard-auth@file,ipallowlist@file,security-headers@file"
+
+  # ---- Optional monitoring stack (metrics “if possible”)
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: prometheus
+    restart: unless-stopped
+    networks:
+      - monitoring
+    volumes:
+      - prometheus_data:/prometheus
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: grafana
+    restart: unless-stopped
+    networks:
+      - monitoring
+      - traefik-public
+    environment:
+      TZ: "${TZ}"
+      GF_SECURITY_ADMIN_USER: "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "change_me_now"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(`grafana.${DOMAIN}`)"
+      - "traefik.http.routers.grafana.entrypoints=websecure"
+      - "traefik.http.routers.grafana.tls=true"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+      - "traefik.http.routers.grafana.middlewares=security-headers@file"
+
+  # ---- Optional test service (quick validation)
+  whoami:
+    image: traefik/whoami:v1.10.3
+    container_name: whoami
+    restart: unless-stopped
+    networks:
+      - traefik-public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.whoami.rule=Host(`whoami.${DOMAIN}`)"
+      - "traefik.http.routers.whoami.entrypoints=websecure"
+      - "traefik.http.routers.whoami.tls=true"
+      - "traefik.http.services.whoami.loadbalancer.server.port=80"
+      - "traefik.http.routers.whoami.middlewares=security-headers@file"
