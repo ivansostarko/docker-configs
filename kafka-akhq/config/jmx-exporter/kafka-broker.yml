@@ -1,0 +1,22 @@
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+
+rules:
+  - pattern: "kafka.server<type=(.+), name=(.+)PerSec\w*><>Count"
+    name: kafka_server_$1_$2_total
+    type: COUNTER
+
+  - pattern: "kafka.server<type=(.+), name=(.+)><>Value"
+    name: kafka_server_$1_$2
+    type: GAUGE
+
+  - pattern: "kafka.network<type=(.+), name=(.+)PerSec\w*><>Count"
+    name: kafka_network_$1_$2_total
+    type: COUNTER
+
+  - pattern: "java.lang<type=Memory><(HeapMemoryUsage|NonHeapMemoryUsage)>(used|committed|max)"
+    name: jvm_memory_bytes
+    labels:
+      area: "$1"
+      what: "$2"
+    type: GAUGE

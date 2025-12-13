@@ -1,0 +1,8 @@
+# Local env
+.env
+
+# Secrets should never be committed
+secrets/*.txt
+
+# Runtime data
+**/data/

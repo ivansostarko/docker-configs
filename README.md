@@ -25,6 +25,8 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [Apache](/apache/README.md)
 - [Nginx](/nginx/README.md)
 - [Nginx Proxy](/nginx-proxy/README.md)
+- [Caddy](/caddy/README.md)
+
 
 ### Databases
 - [MySql](/mysql/README.md)
@@ -39,6 +41,7 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [MongoDB Replica](/mongodb-replica/README.md)
 - [MySql Replication](/mysql-replication/README.md)
 - [Postgres Replication](/postgres-replication/README.md)
+- [Redis Sentiel](/redis-sentinel/README.md)
 
 ### Logs
 - [Kibana](/kibana/README.md)
@@ -49,12 +52,17 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 
 ### Admin Tools
 - [Portainer](/portainer/README.md)
+- [Kafka Admin](/kafka-akhq/README.md)
+- [Portainer](/portainer/README.md)
+- [Wireguard Admin](/wireguard-admin/README.md)
+- [Redis Admin](/redis-admin/README.md)
+- [Rabbitmq Admin](/rabbitmq-admin/README.md)
+
+
+### Database Admin Tools
 - [PhpMyAdmin](/phpmyadmin/README.md)
 - [Adminer](/adminer/README.md)
-- Kafka Admin
-- Redis Admin
-- Postgres Admin
-- RabbitMq Admin
+- [pgadmin](/pgadmin/README.md)
 
 ### Collaboration Tools
 - [Mattermost](/mattermost/README.md)
@@ -67,15 +75,21 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [Grafana](/grafana/README.md)
 - [Alert Manager](/alert-manager/README.md)
 
-### Git
+### Git / CI CD
 - [Gitea](/gitea/README.md)
 - [Gitlab](/gitlab/README.md)
+- [Jenkins](/jenkins/README.md)
 
-### Networks and VPN
+### Networks 
 - [CoreDNS](/coredns/README.md)
 - [HAProxy](/haproxy/README.md)
+
+### VPN
 - [Wireguard](/wireguard/README.md)
 - [Tor](/tor/README.md)
+
+### Repositories
+- [fdroid-repo](/fdroid-repo/README.md)
 
 ### Email
 - [Postal](/postal/README.md)
@@ -106,6 +120,9 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 ### VoIP
 - [Coturn](/coturn/README.md)
 
+### Docker
+- [Docker Registry](/docker-registry/README.md)
+
 ### Backup
 - [MySql Backup](/mysql-backup/README.md)
 - [Postgres Backup](/postgres-backup/README.md)
@@ -127,15 +144,13 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 | Redis      | [Redis Exporter](/prometheus-exporters/redis-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
 | Rabbitmq      | [Rabbitmq Exporter](/prometheus-exporters/rabbitmq-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
 | Nginx      | [Nginx Exporter](/prometheus-exporters/nginx-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
-| Mysqld      | [Mysqld Exporter](/prometheus-exporters/mysqld-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| Mysql     | [Mysqld Exporter](/prometheus-exporters/mysqld-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
 | MongoDB      | [MongoDB Exporter](/prometheus-exporters/mongodb-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
 | Logstash      | [Logstash Exporter](/prometheus-exporters/logstash-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
 | Kibana      | [Kibana Exporter](/prometheus-exporters/kibana-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
 | Kafka      | [Kafka Exporter](/prometheus-exporters/kafka-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
 | Certbot      | [Certbot Exporter](/prometheus-exporters/certbot-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
 | Apache      | [Apache Exporter](/prometheus-exporters/apache-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
-| left baz      | right baz     | left foo      | right foo     | left foo      | right foo     |
-
 
 
 ## Prerequisites

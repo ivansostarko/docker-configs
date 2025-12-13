@@ -1,0 +1,36 @@
+akhq:
+  connections:
+    local-kraft:
+      properties:
+        bootstrap.servers: "kafka1:9092,kafka2:9092,kafka3:9092"
+
+  security:
+    default-group: no-roles
+
+    groups:
+      admin:
+        - role: admin
+          patterns: [".*"]
+          clusters: [".*"]
+      reader:
+        - role: reader
+          patterns: [".*"]
+          clusters: [".*"]
+
+    basic-auth:
+      - username: ${AKHQ_ADMIN_USER}
+        password: ${AKHQ_ADMIN_PASSWORD_SHA256}
+        groups: [admin]
+      - username: ${AKHQ_READER_USER}
+        password: ${AKHQ_READER_PASSWORD_SHA256}
+        groups: [reader]
+
+micronaut:
+  security:
+    enabled: true
+    token:
+      jwt:
+        signatures:
+          secret:
+            generator:
+              secret: ${AKHQ_JWT_SECRET}

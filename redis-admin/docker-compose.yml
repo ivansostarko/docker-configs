@@ -1,0 +1,217 @@
+name: redis-admin
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-common: &common
+  restart: unless-stopped
+  logging: *default-logging
+  networks:
+    - backend
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  redis:
+    image: redis:7.4.7-alpine
+    container_name: redis
+    # Do NOT publish 6379 unless you know exactly why you’re doing it.
+    expose:
+      - "6379"
+    volumes:
+      - redis-data:/data
+      - ./config/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    secrets:
+      - redis_password
+    # Read password from Docker secret and pass it to redis-server.
+    # Note: this puts the password in the process args inside the container; if you want to avoid that,
+    # use an ACL file with a pre-hashed password instead.
+    command: >
+      sh -ec '
+        REDIS_PASSWORD="$(cat /run/secrets/redis_password)";
+        exec redis-server /usr/local/etc/redis/redis.conf
+          --requirepass "$REDIS_PASSWORD"
+          --masterauth "$REDIS_PASSWORD"
+      '
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$(cat /run/secrets/redis_password)\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    sysctls:
+      net.core.somaxconn: 1024
+    <<: *common
+
+  # Primary Redis Admin GUI
+  redisinsight:
+    image: redis/redisinsight:latest
+    container_name: redisinsight
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    # Safe-by-default: bind to localhost unless you override REDISINSIGHT_BIND in .env
+    ports:
+      - "${REDISINSIGHT_BIND:-127.0.0.1}:${REDISINSIGHT_PORT:-5540}:5540"
+
+    environment:
+      # Accept EULA without UI prompt
+      RI_ACCEPT_TERMS_AND_CONDITIONS: "true"
+      RI_LOG_LEVEL: "${RI_LOG_LEVEL:-info}"
+
+      # Encrypt locally stored secrets (DB passwords, etc.) in Redis Insight storage
+      # Keep the key stable if you persist /data.
+      RI_ENCRYPTION_KEY: "${RI_ENCRYPTION_KEY}"
+
+      # OPTIONAL (convenience) preconfigured connection:
+      # The brutal truth: if you put the Redis password here, it’s now an ENV var.
+      # Prefer adding the DB connection manually in the UI if you care about secrecy.
+      # RI_REDIS_HOST0: "redis"
+      # RI_REDIS_PORT0: "6379"
+      # RI_REDIS_ALIAS0: "local-redis"
+      # RI_REDIS_USERNAME0: "default"
+      # RI_REDIS_PASSWORD0: "${REDIS_PASSWORD}"
+
+    volumes:
+      - redisinsight-data:/data
+
+    # Redis Insight provides a health endpoint at /api/health/ on port 5540.
+    # This healthcheck uses wget; if your image lacks it, replace with a tiny sidecar checker.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5540/api/health/ | grep -qi healthy || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 25s
+
+    # Needs backend to reach Redis; edge is optional if you later reverse proxy it.
+    networks:
+      - backend
+      - edge
+    <<: *common
+
+  # Optional alternate lightweight GUI (profiled; off by default)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: redis-commander
+    profiles: ["alt-gui"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      # Format: name:host:port[:dbIndex[:password]]
+      # Password comes from .env (again: ENV var tradeoff). If you don’t like that, don’t preconfigure.
+      REDIS_HOSTS: "local:redis:6379:0:${REDIS_PASSWORD}"
+      HTTP_USER: "${RC_HTTP_USER:-admin}"
+      HTTP_PASSWORD: "${RC_HTTP_PASSWORD:-change-me}"
+    ports:
+      - "${REDIS_COMMANDER_BIND:-127.0.0.1}:${REDIS_COMMANDER_PORT:-8081}:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8081/ >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    <<: *common
+
+  # Metrics exporter for Redis (profiled; off by default)
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: redis-exporter
+    profiles: ["metrics"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    secrets:
+      - redis_password
+    command: >
+      sh -ec '
+        PASS="$(cat /run/secrets/redis_password)";
+        exec /redis_exporter --redis.addr=redis://redis:6379 --redis.password="$PASS"
+      '
+    expose:
+      - "9121"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9121/metrics >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    <<: *common
+
+  # Optional Prometheus (profiled; off by default)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    profiles: ["metrics"]
+    depends_on:
+      redis-exporter:
+        condition: service_healthy
+    ports:
+      - "${PROMETHEUS_BIND:-127.0.0.1}:${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - prometheus-data:/prometheus
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/healthy >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    <<: *common
+
+  # Optional Grafana (profiled; off by default)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    profiles: ["metrics"]
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    ports:
+      - "${GRAFANA_BIND:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    secrets:
+      - grafana_admin_password
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health | grep -qi ok || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    <<: *common
+
+networks:
+  backend:
+    driver: bridge
+    internal: true
+  edge:
+    driver: bridge
+
+volumes:
+  redis-data:
+  redisinsight-data:
+  prometheus-data:
+  grafana-data:
+
+secrets:
+  redis_password:
+    file: ./secrets/redis_password.txt
+  ri_encryption_key:
+    file: ./secrets/ri_encryption_key.txt
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password.txt

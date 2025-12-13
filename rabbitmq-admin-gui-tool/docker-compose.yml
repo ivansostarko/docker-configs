@@ -1,0 +1,134 @@
+version: "3.9"
+
+name: rabbitmq-stack
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+networks:
+  rabbitmq_net:
+    driver: bridge
+  observability_net:
+    driver: bridge
+
+volumes:
+  rabbitmq_data:
+  prometheus_data:
+  grafana_data:
+
+secrets:
+  rabbitmq_user:
+    file: ./secrets/rabbitmq_user.txt
+  rabbitmq_password:
+    file: ./secrets/rabbitmq_password.txt
+  rabbitmq_erlang_cookie:
+    file: ./secrets/erlang_cookie.txt
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: rabbitmq
+    restart: unless-stopped
+    logging: *default-logging
+
+    networks:
+      - rabbitmq_net
+      - observability_net
+
+    # Best practice: bind admin ports to localhost unless you put it behind a reverse proxy/VPN.
+    ports:
+      - "${RABBITMQ_AMQP_BIND:-127.0.0.1}:${RABBITMQ_AMQP_PORT:-5672}:5672"     # AMQP
+      - "${RABBITMQ_UI_BIND:-127.0.0.1}:${RABBITMQ_UI_PORT:-15672}:15672"       # Admin GUI
+      - "${RABBITMQ_PROM_BIND:-127.0.0.1}:${RABBITMQ_PROM_PORT:-15692}:15692"   # Prometheus metrics (plugin)
+
+    environment:
+      # Use secrets via *_FILE variants (avoid plaintext env vars)
+      RABBITMQ_DEFAULT_USER_FILE: /run/secrets/rabbitmq_user
+      RABBITMQ_DEFAULT_PASS_FILE: /run/secrets/rabbitmq_password
+      RABBITMQ_ERLANG_COOKIE_FILE: /run/secrets/rabbitmq_erlang_cookie
+
+      # Optional: set a stable node name (good for clustering later)
+      RABBITMQ_NODENAME: "rabbit@rabbitmq"
+
+    secrets:
+      - rabbitmq_user
+      - rabbitmq_password
+      - rabbitmq_erlang_cookie
+
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./config/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./config/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - ./config/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping && rabbitmq-diagnostics -q check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    stop_grace_period: 60s
+
+  # ----------------------------
+  # Optional Observability Stack
+  # ----------------------------
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: prometheus
+    restart: unless-stopped
+    logging: *default-logging
+    profiles: ["observability"]
+
+    networks:
+      - observability_net
+
+    # Bind to localhost by default
+    ports:
+      - "${PROM_BIND:-127.0.0.1}:${PROM_PORT:-9090}:9090"
+
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: grafana
+    restart: unless-stopped
+    logging: *default-logging
+    profiles: ["observability"]
+
+    networks:
+      - observability_net
+
+    ports:
+      - "${GRAFANA_BIND:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
+
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-change_me_now}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+
+    depends_on:
+      prometheus:
+        condition: service_started

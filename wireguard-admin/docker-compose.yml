@@ -1,0 +1,119 @@
+services:
+  wg-easy:
+    image: ghcr.io/wg-easy/wg-easy:15 # recommended “major” tag to avoid breaking changes
+    container_name: wg-easy
+    restart: unless-stopped
+
+    # WireGuard requires elevated network capabilities.
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+
+    # Required for WireGuard tunnel interface
+    devices:
+      - /dev/net/tun:/dev/net/tun
+
+    # Kernel modules access (wg kernel module). Read-only.
+    volumes:
+      - etc_wireguard:/etc/wireguard
+      - /lib/modules:/lib/modules:ro
+
+    # Safer default: bind admin UI to localhost only.
+    # To expose UI directly: set WG_UI_BIND=0.0.0.0 in .env (not recommended).
+    ports:
+      - "${WG_UDP_PORT:-51820}:51820/udp"
+      - "${WG_UI_BIND:-127.0.0.1}:${WG_UI_PORT:-51821}:51821/tcp"
+
+    # Host networking knobs required for routing.
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.src_valid_mark=1
+      # Keep IPv6 enabled unless you *know* you need it off.
+      - net.ipv6.conf.all.disable_ipv6=0
+      - net.ipv6.conf.all.forwarding=1
+      - net.ipv6.conf.default.forwarding=1
+
+    # wg-easy v15 “unattended setup” (FIRST START ONLY).
+    # After first successful boot + login, remove INIT_* from .env to reduce secret exposure.
+    environment:
+      # Optional container config
+      - PORT=${WG_UI_PORT:-51821}
+      - HOST=0.0.0.0
+      - INSECURE=${WG_INSECURE:-false}
+      - DISABLE_IPV6=${WG_DISABLE_IPV6:-false}
+
+      # Unattended Setup (grouped requirements apply)
+      - INIT_ENABLED=${WG_INIT_ENABLED:-true}
+      - INIT_USERNAME=${WG_INIT_USERNAME:-admin}
+      - INIT_PASSWORD=${WG_INIT_PASSWORD}
+      - INIT_HOST=${WG_INIT_HOST}
+      - INIT_PORT=${WG_INIT_PORT:-51820}
+      - INIT_DNS=${WG_INIT_DNS:-1.1.1.1,8.8.8.8}
+      - INIT_IPV4_CIDR=${WG_INIT_IPV4_CIDR:-10.8.0.0/24}
+      - INIT_IPV6_CIDR=${WG_INIT_IPV6_CIDR:-fdcc:ad94:bacf:61a3::/64}
+
+    networks:
+      wg:
+        ipv4_address: 10.42.42.42
+        ipv6_address: fdcc:ad94:bacf:61a3::2a
+
+    # Healthcheck: assumes wget exists. If the image ever lacks wget, remove/replace.
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider --tries=1 --no-verbose http://127.0.0.1:${WG_UI_PORT:-51821}/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # Optional reverse proxy (recommended) – exposes HTTPS for the admin UI.
+  # Enable by running: docker compose --profile proxy up -d
+  caddy:
+    image: caddy:2
+    container_name: wg-caddy
+    restart: unless-stopped
+    profiles: ["proxy"]
+    depends_on:
+      - wg-easy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - wg
+
+  # Optional monitoring (Prometheus) – scrapes wg-easy built-in metrics endpoint.
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: wg-prometheus
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks:
+      - wg
+    depends_on:
+      - wg-easy
+
+networks:
+  wg:
+    driver: bridge
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 10.42.42.0/24
+        - subnet: fdcc:ad94:bacf:61a3::/64
+
+volumes:
+  etc_wireguard:
+  prometheus_data:
+  caddy_data:
+  caddy_config:

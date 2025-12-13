@@ -1,0 +1,158 @@
+version: "3.9"
+
+name: pgadmin-stack
+
+services:
+  postgres:
+    image: postgres:17.2-alpine
+    container_name: pgadmin-postgres
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    secrets:
+      - postgres_password
+      - pgadmin_db_password
+      - postgres_exporter_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/conf/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./postgres/conf/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    command:
+      - "postgres"
+      - "-c"
+      - "config_file=/etc/postgresql/postgresql.conf"
+      - "-c"
+      - "hba_file=/etc/postgresql/pg_hba.conf"
+    ports:
+      # Bind only to localhost by default. Put a reverse proxy / firewall in front if you must expose it.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} -h 127.0.0.1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    shm_size: "256mb"
+    networks:
+      backend:
+        ipv4_address: 172.28.5.10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  pgadmin:
+    image: dpage/pgadmin4:9.11.0
+    container_name: pgadmin-ui
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ}
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD_FILE: /run/secrets/pgadmin_password
+      PGADMIN_DISABLE_POSTFIX: "True"
+
+      # server provisioning
+      PGADMIN_SERVER_JSON_FILE: /pgadmin4/servers.json
+      PGADMIN_REPLACE_SERVERS_ON_STARTUP: "True"
+
+      # basic hardening
+      PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION: "True"
+      PGADMIN_CONFIG_LOGIN_BANNER: ${PGADMIN_LOGIN_BANNER}
+    secrets:
+      - pgadmin_password
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
+      - ./pgadmin/preferences.json:/pgadmin4/preferences.json:ro
+      - ./pgadmin/config_local.py:/pgadmin4/config_local.py:ro
+    ports:
+      - "127.0.0.1:${PGADMIN_PORT:-5050}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/misc/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 160s
+    networks:
+      - frontend
+      - backend
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  postgres_exporter:
+    image: prometheuscommunity/postgres-exporter:v0.17.1
+    container_name: pgadmin-postgres-exporter
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    secrets:
+      - postgres_exporter_password
+    environment:
+      TZ: ${TZ}
+      EXPORTER_DB: ${POSTGRES_DB}
+      EXPORTER_HOST: postgres
+      EXPORTER_PORT: "5432"
+      EXPORTER_USER: postgres_exporter
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        PASS="$(cat /run/secrets/postgres_exporter_password)"
+        export DATA_SOURCE_NAME="postgresql://${EXPORTER_USER}:${PASS}@${EXPORTER_HOST}:${EXPORTER_PORT}/${EXPORTER_DB}?sslmode=disable"
+        exec /bin/postgres_exporter           --web.listen-address=:9187           --web.telemetry-path=/metrics           --config.file=/etc/postgres_exporter/postgres_exporter.yml
+    volumes:
+      - ./postgres-exporter/postgres_exporter.yml:/etc/postgres_exporter/postgres_exporter.yml:ro
+    expose:
+      - "9187"
+    networks:
+      backend:
+        ipv4_address: 172.28.5.20
+    labels:
+      prometheus.scrape: "true"
+      prometheus.port: "9187"
+      prometheus.path: "/metrics"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9187/metrics >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.5.0/24
+
+volumes:
+  postgres_data:
+  pgadmin_data:
+
+secrets:
+  pgadmin_password:
+    file: ./secrets/pgadmin_password.txt
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  pgadmin_db_password:
+    file: ./secrets/pgadmin_db_password.txt
+  postgres_exporter_password:
+    file: ./secrets/postgres_exporter_password.txt

@@ -1,0 +1,16 @@
+{
+  "vhosts": [
+    {
+      "name": "/app"
+    }
+  ],
+  "permissions": [
+    {
+      "user": "admin",
+      "vhost": "/app",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    }
+  ]
+}

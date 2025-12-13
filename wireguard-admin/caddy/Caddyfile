@@ -1,0 +1,9 @@
+wg-admin.example.com {
+  reverse_proxy wg-easy:51821
+
+  header {
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "no-referrer"
+  }
+}
