@@ -1,0 +1,299 @@
+version: "3.9"
+
+name: redis-sentinel
+
+x-redis-common: &redis-common
+  image: ${REDIS_IMAGE:-redis:7.4-alpine}
+  restart: unless-stopped
+  networks:
+    - redis_net
+  secrets:
+    - redis_password
+  volumes:
+    - type: bind
+      source: ./redis/entrypoint-redis.sh
+      target: /usr/local/bin/entrypoint-redis.sh
+      read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  stop_grace_period: 30s
+  ulimits:
+    nofile:
+      soft: 100000
+      hard: 100000
+  healthcheck:
+    test: ["CMD-SHELL", "redis-cli -a \"$$(cat /run/secrets/redis_password)\" ping | grep -q PONG"]
+    interval: 10s
+    timeout: 5s
+    retries: 10
+    start_period: 20s
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+x-sentinel-common: &sentinel-common
+  image: ${REDIS_IMAGE:-redis:7.4-alpine}
+  restart: unless-stopped
+  networks:
+    - redis_net
+  secrets:
+    - redis_password
+  volumes:
+    - type: bind
+      source: ./sentinel/entrypoint-sentinel.sh
+      target: /usr/local/bin/entrypoint-sentinel.sh
+      read_only: true
+    - type: bind
+      source: ./sentinel/sentinel.conf.tpl
+      target: /templates/sentinel.conf.tpl
+      read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  stop_grace_period: 30s
+  healthcheck:
+    test: ["CMD-SHELL", "redis-cli -p 26379 ping | grep -q PONG"]
+    interval: 10s
+    timeout: 5s
+    retries: 10
+    start_period: 20s
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  # -------------------------
+  # Redis (1 master, 2 replicas)
+  # -------------------------
+  redis-1:
+    <<: *redis-common
+    container_name: redis-1
+    hostname: redis-1
+    volumes:
+      - redis1_data:/data
+      - type: bind
+        source: ./redis/redis-master.conf.tpl
+        target: /templates/redis.conf.tpl
+        read_only: true
+      - type: bind
+        source: ./redis/entrypoint-redis.sh
+        target: /usr/local/bin/entrypoint-redis.sh
+        read_only: true
+    environment:
+      NODE_ROLE: "master"
+      REDIS_PORT: "6379"
+      REDIS_BIND: "0.0.0.0"
+    command: ["sh", "/usr/local/bin/entrypoint-redis.sh"]
+    # Optional: expose master locally only (recommended)
+    ports:
+      - "${REDIS_MASTER_PUBLISH_ADDR:-127.0.0.1}:${REDIS_MASTER_PUBLISH_PORT:-6379}:6379"
+
+  redis-2:
+    <<: *redis-common
+    container_name: redis-2
+    hostname: redis-2
+    depends_on:
+      redis-1:
+        condition: service_healthy
+    volumes:
+      - redis2_data:/data
+      - type: bind
+        source: ./redis/redis-replica.conf.tpl
+        target: /templates/redis.conf.tpl
+        read_only: true
+      - type: bind
+        source: ./redis/entrypoint-redis.sh
+        target: /usr/local/bin/entrypoint-redis.sh
+        read_only: true
+    environment:
+      NODE_ROLE: "replica"
+      MASTER_HOST: "redis-1"
+      MASTER_PORT: "6379"
+      REDIS_PORT: "6379"
+      REDIS_BIND: "0.0.0.0"
+    command: ["sh", "/usr/local/bin/entrypoint-redis.sh"]
+
+  redis-3:
+    <<: *redis-common
+    container_name: redis-3
+    hostname: redis-3
+    depends_on:
+      redis-1:
+        condition: service_healthy
+    volumes:
+      - redis3_data:/data
+      - type: bind
+        source: ./redis/redis-replica.conf.tpl
+        target: /templates/redis.conf.tpl
+        read_only: true
+      - type: bind
+        source: ./redis/entrypoint-redis.sh
+        target: /usr/local/bin/entrypoint-redis.sh
+        read_only: true
+    environment:
+      NODE_ROLE: "replica"
+      MASTER_HOST: "redis-1"
+      MASTER_PORT: "6379"
+      REDIS_PORT: "6379"
+      REDIS_BIND: "0.0.0.0"
+    command: ["sh", "/usr/local/bin/entrypoint-redis.sh"]
+
+  # -------------------------
+  # Sentinels (3 nodes, quorum=2)
+  # -------------------------
+  sentinel-1:
+    <<: *sentinel-common
+    container_name: sentinel-1
+    hostname: sentinel-1
+    depends_on:
+      redis-1:
+        condition: service_healthy
+      redis-2:
+        condition: service_healthy
+      redis-3:
+        condition: service_healthy
+    environment:
+      SENTINEL_PORT: "26379"
+      SENTINEL_MONITOR_NAME: "${SENTINEL_MONITOR_NAME:-mymaster}"
+      MASTER_HOST: "redis-1"
+      MASTER_PORT: "6379"
+      SENTINEL_QUORUM: "${SENTINEL_QUORUM:-2}"
+      DOWN_AFTER_MS: "${SENTINEL_DOWN_AFTER_MS:-5000}"
+      FAILOVER_TIMEOUT_MS: "${SENTINEL_FAILOVER_TIMEOUT_MS:-60000}"
+      PARALLEL_SYNCS: "${SENTINEL_PARALLEL_SYNCS:-1}"
+    command: ["sh", "/usr/local/bin/entrypoint-sentinel.sh"]
+    ports:
+      - "${SENTINEL_PUBLISH_ADDR:-127.0.0.1}:${SENTINEL_PUBLISH_PORT:-26379}:26379"
+
+  sentinel-2:
+    <<: *sentinel-common
+    container_name: sentinel-2
+    hostname: sentinel-2
+    depends_on:
+      sentinel-1:
+        condition: service_healthy
+    environment:
+      SENTINEL_PORT: "26379"
+      SENTINEL_MONITOR_NAME: "${SENTINEL_MONITOR_NAME:-mymaster}"
+      MASTER_HOST: "redis-1"
+      MASTER_PORT: "6379"
+      SENTINEL_QUORUM: "${SENTINEL_QUORUM:-2}"
+      DOWN_AFTER_MS: "${SENTINEL_DOWN_AFTER_MS:-5000}"
+      FAILOVER_TIMEOUT_MS: "${SENTINEL_FAILOVER_TIMEOUT_MS:-60000}"
+      PARALLEL_SYNCS: "${SENTINEL_PARALLEL_SYNCS:-1}"
+    command: ["sh", "/usr/local/bin/entrypoint-sentinel.sh"]
+
+  sentinel-3:
+    <<: *sentinel-common
+    container_name: sentinel-3
+    hostname: sentinel-3
+    depends_on:
+      sentinel-1:
+        condition: service_healthy
+    environment:
+      SENTINEL_PORT: "26379"
+      SENTINEL_MONITOR_NAME: "${SENTINEL_MONITOR_NAME:-mymaster}"
+      MASTER_HOST: "redis-1"
+      MASTER_PORT: "6379"
+      SENTINEL_QUORUM: "${SENTINEL_QUORUM:-2}"
+      DOWN_AFTER_MS: "${SENTINEL_DOWN_AFTER_MS:-5000}"
+      FAILOVER_TIMEOUT_MS: "${SENTINEL_FAILOVER_TIMEOUT_MS:-60000}"
+      PARALLEL_SYNCS: "${SENTINEL_PARALLEL_SYNCS:-1}"
+    command: ["sh", "/usr/local/bin/entrypoint-sentinel.sh"]
+
+  # -------------------------
+  # Metrics (optional): Prometheus + Grafana + Redis Exporters
+  # Enable via: docker compose --profile metrics up -d
+  # -------------------------
+  redis-exporter-1:
+    image: ${REDIS_EXPORTER_IMAGE:-oliver006/redis_exporter:v1.67.0}
+    profiles: ["metrics"]
+    restart: unless-stopped
+    networks: [redis_net, monitoring_net]
+    secrets: [redis_password]
+    environment:
+      REDIS_ADDR: "redis://redis-1:6379"
+      REDIS_PASSWORD_FILE: "/run/secrets/redis_password"
+    depends_on:
+      redis-1:
+        condition: service_healthy
+
+  redis-exporter-2:
+    image: ${REDIS_EXPORTER_IMAGE:-oliver006/redis_exporter:v1.67.0}
+    profiles: ["metrics"]
+    restart: unless-stopped
+    networks: [redis_net, monitoring_net]
+    secrets: [redis_password]
+    environment:
+      REDIS_ADDR: "redis://redis-2:6379"
+      REDIS_PASSWORD_FILE: "/run/secrets/redis_password"
+    depends_on:
+      redis-2:
+        condition: service_healthy
+
+  redis-exporter-3:
+    image: ${REDIS_EXPORTER_IMAGE:-oliver006/redis_exporter:v1.67.0}
+    profiles: ["metrics"]
+    restart: unless-stopped
+    networks: [redis_net, monitoring_net]
+    secrets: [redis_password]
+    environment:
+      REDIS_ADDR: "redis://redis-3:6379"
+      REDIS_PASSWORD_FILE: "/run/secrets/redis_password"
+    depends_on:
+      redis-3:
+        condition: service_healthy
+
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v3.5.0}
+    profiles: ["metrics"]
+    restart: unless-stopped
+    networks: [monitoring_net]
+    volumes:
+      - type: bind
+        source: ./monitoring/prometheus.yml
+        target: /etc/prometheus/prometheus.yml
+        read_only: true
+      - prometheus_data:/prometheus
+    ports:
+      - "${PROMETHEUS_PUBLISH_ADDR:-127.0.0.1}:${PROMETHEUS_PUBLISH_PORT:-9090}:9090"
+
+  grafana:
+    image: ${GRAFANA_IMAGE:-grafana/grafana:12.1.0}
+    profiles: ["metrics"]
+    restart: unless-stopped
+    networks: [monitoring_net]
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-admin-change-me}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "${GRAFANA_PUBLISH_ADDR:-127.0.0.1}:${GRAFANA_PUBLISH_PORT:-3000}:3000"
+
+networks:
+  redis_net:
+    driver: bridge
+    internal: true
+  monitoring_net:
+    driver: bridge
+    internal: true
+
+volumes:
+  redis1_data:
+  redis2_data:
+  redis3_data:
+  prometheus_data:
+  grafana_data:
+
+secrets:
+  redis_password:
+    file: ./secrets/redis_password.txt

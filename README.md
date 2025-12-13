@@ -4,7 +4,6 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 
 ## What this repo is:
 
-
 ### Apps
 - [Wordpress](/wordpress/README.md)
 - [NextCloud](/nextcloud/README.md)
@@ -22,12 +21,10 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [Flutter](/flutter/README.md)
 - [Angular](/angular/README.md)
 
-
 ### Web servers
 - [Apache](/apache/README.md)
 - [Nginx](/nginx/README.md)
 - [Nginx Proxy](/nginx-proxy/README.md)
-
 
 ### Databases
 - [MySql](/mysql/README.md)
@@ -43,15 +40,12 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [MySql Replication](/mysql-replication/README.md)
 - [Postgres Replication](/postgres-replication/README.md)
 
-
 ### Logs
 - [Kibana](/kibana/README.md)
 - [Logstash](/logstash/README.md)
 
-
 ### Status Page
 - [CachetHq](/cachethq/README.md)
-
 
 ### Admin Tools
 - [Portainer](/portainer/README.md)
@@ -62,13 +56,11 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - Postgres Admin
 - RabbitMq Admin
 
-
 ### Collaboration Tools
 - [Mattermost](/mattermost/README.md)
 
 ### Error Management
 - [Glitchtip](/glitchtip/README.md)
-
 
 ### Monitoring
 - [Prometheus](/prometheus/README.md)
@@ -78,9 +70,6 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 ### Git
 - [Gitea](/gitea/README.md)
 - [Gitlab](/gitlab/README.md)
-
-
-
 
 ### Networks and VPN
 - [CoreDNS](/coredns/README.md)
@@ -92,7 +81,7 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [Postal](/postal/README.md)
 - [Mailhog](/mailhog/README.md)
 
-### AI
+### AI Tools
 - [Ollama](/ollama/README.md)
 - [Open AI Web](/open-ai-web/README.md)
 
@@ -103,7 +92,7 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [Minio](/minio/README.md)
 - [Gluster](/gluster/README.md)
 
-### queue
+### Queue
 - [Kafka](/kafka/README.md)
 - [Beanstalkd](/beanstalkd/README.md)
 - [RabbitMq](/rabbitmq/README.md)
@@ -114,16 +103,14 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 ### Auth
 - [Keycloak](/keycloak/README.md)
 
-
 ### VoIP
 - [Coturn](/coturn/README.md)
-
 
 ### Backup
 - [MySql Backup](/mysql-backup/README.md)
 - [Postgres Backup](/postgres-backup/README.md)
 - [MongoDB Backup](/mongodb-backup/README.md)
-- Bacula
+- [Bacula Backup](/bacula-backup/README.md)
 
 ### Metrics / Prometheus Exporters
 - [Coturn Exporter](/prometheus-exporters/coturn-exporter/README.md)

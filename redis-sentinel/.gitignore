@@ -1,0 +1,11 @@
+# Secrets
+secrets/*.txt
+
+# Redis data (if you ever switch to bind mounts)
+**/data/
+
+# Local overrides
+.env.local
+
+# OS files
+.DS_Store
