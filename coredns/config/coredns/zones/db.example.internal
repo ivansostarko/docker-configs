@@ -1,0 +1,14 @@
+$ORIGIN example.internal.
+$TTL 60
+@   IN  SOA ns1.example.internal. admin.example.internal. (
+        2025121301 ; serial
+        3600       ; refresh
+        600        ; retry
+        1209600    ; expire
+        60         ; minimum
+)
+    IN  NS  ns1.example.internal.
+
+ns1 IN  A   172.28.0.53
+app IN  A   10.10.10.10
+db  IN  A   10.10.10.11

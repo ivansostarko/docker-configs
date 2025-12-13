@@ -19,8 +19,9 @@ services:
     environment:
       TZ: ${TZ:-Europe/Zagreb}
 
-    # Security note (blunt): mounting docker.sock effectively grants root-equivalent control of the host to Portainer.
-    # If Portainer is exposed to the internet and compromised, your host is compromised. Treat it accordingly.
+    # SECURITY NOTE:
+    # Mounting /var/run/docker.sock grants Portainer effectively root-equivalent control of the host.
+    # Do not expose Portainer directly to the internet unless you understand and accept this risk.
     volumes:
       - portainer_data:/data
       - /var/run/docker.sock:/var/run/docker.sock
@@ -34,8 +35,7 @@ services:
       - "${PORTAINER_BIND_ADDR:-0.0.0.0}:${PORTAINER_TUNNEL_PORT:-8000}:8000"
       - "${PORTAINER_BIND_ADDR:-0.0.0.0}:${PORTAINER_HTTP_PORT:-9000}:9000"
 
-    # Seed initial admin password (FIRST BOOT ONLY).
-    # After Portainer has created the admin user, this flag is ignored on subsequent restarts. :contentReference[oaicite:1]{index=1}
+    # Seed initial admin password (first initialization only).
     secrets:
       - portainer_admin_password
     command:
@@ -49,11 +49,7 @@ services:
     security_opt:
       - no-new-privileges:true
 
-    # Optional hardening (use if you understand the tradeoffs):
-    # init: true
-
-    # Optional healthcheck (may or may not work depending on tools present in the image).
-    # If it fails, remove it; a broken healthcheck is worse than none.
+    # Optional healthcheck. If it fails in your environment, remove it.
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://127.0.0.1:9443/api/system/status >/dev/null 2>&1 || exit 1"]
       interval: 30s
@@ -61,8 +57,7 @@ services:
       retries: 5
       start_period: 40s
 
-  # OPTIONAL: host a templates JSON over HTTP inside the same Docker network.
-  # Portainer's --templates flag expects a URL, not a local file path. :contentReference[oaicite:2]{index=2}
+  # OPTIONAL: serve Portainer templates JSON over HTTP in the same Docker network.
   portainer-templates:
     image: nginx:alpine
     container_name: portainer-templates
@@ -88,7 +83,7 @@ networks:
     name: ${ASTERIX_NETWORK_NAME:-asterix_network}
     driver: bridge
     attachable: true
-    # If you already created this network externally (or want Docker to manage subnets), remove ipam entirely.
+    # If you already created this network externally, remove ipam or align it to your existing subnet.
     ipam:
       config:
         - subnet: ${ASTERIX_SUBNET:-172.30.0.0/16}

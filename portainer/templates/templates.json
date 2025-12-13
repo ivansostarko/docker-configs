@@ -1,0 +1,20 @@
+{
+  "version": "3",
+  "templates": [
+    {
+      "type": 1,
+      "title": "Example App (Placeholder)",
+      "description": "Placeholder template entry. Replace with your real templates.",
+      "note": "Edit templates/templates.json to add your own stacks/app templates.",
+      "categories": [
+        "Examples"
+      ],
+      "platform": "linux",
+      "logo": "https://portainer.io/images/logos/portainer_logo_black.svg",
+      "repository": {
+        "url": "https://github.com/portainer/templates",
+        "stackfile": "docker-compose.yml"
+      }
+    }
+  ]
+}

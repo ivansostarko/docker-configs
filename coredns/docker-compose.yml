@@ -1,0 +1,96 @@
+version: "3.9"
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  coredns:
+    image: coredns/coredns:1.11.3
+    # "latest" is how you volunteer for surprise outages.
+    container_name: coredns
+    hostname: coredns
+
+    # If you run on a host with systemd-resolved, port 53 is commonly already taken.
+    # Fix the host conflict first, don’t blame Docker later.
+    ports:
+      - "${COREDNS_BIND_IP:-0.0.0.0}:${COREDNS_DNS_PORT:-53}:53/udp"
+      - "${COREDNS_BIND_IP:-0.0.0.0}:${COREDNS_DNS_PORT:-53}:53/tcp"
+      - "${COREDNS_BIND_IP:-127.0.0.1}:${COREDNS_METRICS_PORT:-9153}:9153/tcp"
+
+    # Keep it explicit; don't rely on image defaults.
+    command: ["-conf", "/etc/coredns/Corefile"]
+
+    # Minimal privileges:
+    # - bind to port 53 requires root OR NET_BIND_SERVICE capability
+    user: "${PUID:-1000}:${PGID:-1000}"
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+
+    # Reduce writable surface area.
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+
+    restart: unless-stopped
+    init: true
+
+    networks:
+      dns_net:
+        ipv4_address: "${COREDNS_IPV4:-172.28.0.53}"
+
+    # Use "configs" for the Corefile; use a bind mount for zones directory (configs can't mount dirs cleanly).
+    configs:
+      - source: coredns_corefile
+        target: /etc/coredns/Corefile
+        mode: 0444
+
+    volumes:
+      - type: bind
+        source: ${COREDNS_CONFIG_DIR:-/config/coredns}/zones
+        target: /etc/coredns/zones
+        read_only: true
+
+      # Optional: if you use the "hosts" plugin with a file you want to manage separately
+      # - type: bind
+      #   source: ${COREDNS_CONFIG_DIR:-/config/coredns}/hosts
+      #   target: /etc/coredns/hosts
+      #   read_only: true
+
+    # Optional secrets (use only if your Corefile references them, e.g., TLS for DoT)
+    secrets:
+      - source: coredns_tls_cert
+        target: coredns_tls_cert.pem
+      - source: coredns_tls_key
+        target: coredns_tls_key.pem
+
+    environment:
+      TZ: "${TZ:-Europe/Zagreb}"
+
+    logging: *default-logging
+
+networks:
+  dns_net:
+    name: "${DNS_NETWORK_NAME:-dns_net}"
+    driver: bridge
+    ipam:
+      config:
+        - subnet: "${DNS_SUBNET:-172.28.0.0/24}"
+
+configs:
+  coredns_corefile:
+    file: "${COREDNS_CONFIG_DIR:-/config/coredns}/Corefile"
+
+secrets:
+  # These are file-backed secrets. Keep them out of git. Limit file permissions on the host.
+  coredns_tls_cert:
+    file: "${COREDNS_SECRETS_DIR:-/config/coredns/secrets}/tls_cert.pem"
+  coredns_tls_key:
+    file: "${COREDNS_SECRETS_DIR:-/config/coredns/secrets}/tls_key.pem"
