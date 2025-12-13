@@ -1,0 +1,32 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "HAProxy - Current Sessions",
+      "targets": [
+        {
+          "expr": "sum(haproxy_frontend_current_sessions)",
+          "legendFormat": "sessions"
+        }
+      ],
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 0}
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["haproxy"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "HAProxy (Minimal)",
+  "uid": "haproxy-min",
+  "version": 1
+}

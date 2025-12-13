@@ -1,0 +1,175 @@
+services:
+  pg-primary:
+    image: ${POSTGRES_IMAGE}
+    container_name: pg-primary
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      # Official image supports *_FILE to read from secrets
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+      - repl_password
+    networks:
+      pg-net:
+        ipv4_address: 172.20.0.10
+    ports:
+      - "${PG_PRIMARY_PORT}:5432"
+    volumes:
+      - pg_primary_data:/var/lib/postgresql/data
+      - ./primary/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./primary/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./primary/init:/docker-entrypoint-initdb.d:ro
+      - pg_primary_wal_archive:/var/lib/postgresql/wal_archive
+    command: >
+      postgres
+      -c config_file=/etc/postgresql/postgresql.conf
+      -c hba_file=/etc/postgresql/pg_hba.conf
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} -h 127.0.0.1 -p 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  pg-replica1:
+    image: ${POSTGRES_IMAGE}
+    container_name: pg-replica1
+    restart: unless-stopped
+    depends_on:
+      pg-primary:
+        condition: service_healthy
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      REPL_USER: ${REPL_USER}
+      REPL_SLOT: ${REPL_SLOT}
+      PRIMARY_HOST: pg-primary
+      PRIMARY_PORT: 5432
+    secrets:
+      - postgres_password
+      - repl_password
+    networks:
+      pg-net:
+        ipv4_address: 172.20.0.11
+    ports:
+      - "${PG_REPLICA1_PORT}:5432"
+    volumes:
+      - pg_replica1_data:/var/lib/postgresql/data
+      - ./replica/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./replica/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./replica/init:/docker-entrypoint-initdb.d:ro
+    command: >
+      bash -lc "
+      chmod +x /docker-entrypoint-initdb.d/01-bootstrap-replica.sh &&
+      /docker-entrypoint-initdb.d/01-bootstrap-replica.sh &&
+      exec postgres
+        -c config_file=/etc/postgresql/postgresql.conf
+        -c hba_file=/etc/postgresql/pg_hba.conf
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} -h 127.0.0.1 -p 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  postgres-exporter-primary:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: postgres-exporter-primary
+    restart: unless-stopped
+    depends_on:
+      pg-primary:
+        condition: service_healthy
+    environment:
+      # DSN uses the app user; ensure it has CONNECT + pg_monitor-ish visibility as needed.
+      DATA_SOURCE_URI: "pg-primary:5432/${POSTGRES_DB}?sslmode=disable"
+      DATA_SOURCE_USER: "${POSTGRES_USER}"
+      DATA_SOURCE_PASS_FILE: /run/secrets/postgres_password
+      PG_EXPORTER_EXTEND_QUERY_PATH: /etc/postgres_exporter/queries.yml
+    secrets:
+      - postgres_password
+    networks:
+      - pg-net
+    ports:
+      - "${EXPORTER_PRIMARY_PORT}:9187"
+    volumes:
+      - ./exporter/queries.yml:/etc/postgres_exporter/queries.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9187/metrics > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  postgres-exporter-replica1:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: postgres-exporter-replica1
+    restart: unless-stopped
+    depends_on:
+      pg-replica1:
+        condition: service_healthy
+    environment:
+      DATA_SOURCE_URI: "pg-replica1:5432/${POSTGRES_DB}?sslmode=disable"
+      DATA_SOURCE_USER: "${POSTGRES_USER}"
+      DATA_SOURCE_PASS_FILE: /run/secrets/postgres_password
+      PG_EXPORTER_EXTEND_QUERY_PATH: /etc/postgres_exporter/queries.yml
+    secrets:
+      - postgres_password
+    networks:
+      - pg-net
+    ports:
+      - "${EXPORTER_REPLICA1_PORT}:9187"
+    volumes:
+      - ./exporter/queries.yml:/etc/postgres_exporter/queries.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9187/metrics > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: prometheus
+    restart: unless-stopped
+    depends_on:
+      - postgres-exporter-primary
+      - postgres-exporter-replica1
+    networks:
+      - pg-net
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/ready > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+networks:
+  pg-net:
+    name: pg-net
+    driver: bridge
+    internal: false
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  pg_primary_data:
+  pg_primary_wal_archive:
+  pg_replica1_data:
+  prometheus_data:
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  repl_password:
+    file: ./secrets/repl_password.txt

@@ -1,0 +1,15 @@
+# Local secrets (never commit)
+secrets/*.txt
+
+# Local override
+*.local
+.env.local
+
+# Editor
+.DS_Store
+.idea/
+.vscode/
+
+# Prometheus/Grafana runtime data (handled by volumes, but keep clean)
+prometheus_data/
+grafana_data/

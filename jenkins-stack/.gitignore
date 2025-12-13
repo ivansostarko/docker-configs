@@ -1,0 +1,5 @@
+# Secrets
+secrets/*.txt
+
+# Local volumes/artefacts
+*.tgz

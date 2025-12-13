@@ -1,0 +1,185 @@
+version: "3.9"
+
+name: haproxy_stack
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-security-opts: &default-security-opts
+  - no-new-privileges:true
+
+x-common-constraints: &common-constraints
+  restart: unless-stopped
+  stop_grace_period: 10s
+  logging: *default-logging
+
+networks:
+  edge:
+    name: ${COMPOSE_PROJECT_NAME:-haproxy_stack}_edge
+    driver: bridge
+    internal: false
+  app:
+    name: ${COMPOSE_PROJECT_NAME:-haproxy_stack}_app
+    driver: bridge
+    internal: true
+
+volumes:
+  haproxy_run:
+    name: ${COMPOSE_PROJECT_NAME:-haproxy_stack}_haproxy_run
+  prometheus_data:
+    name: ${COMPOSE_PROJECT_NAME:-haproxy_stack}_prometheus_data
+  grafana_data:
+    name: ${COMPOSE_PROJECT_NAME:-haproxy_stack}_grafana_data
+
+secrets:
+  # Create real values in ./secrets/ (see README) before deploying.
+  haproxy_stats_password:
+    file: ./secrets/haproxy_stats_password.txt
+  # Optional: TLS PEM bundle (certificate + key). If you don't need TLS, ignore.
+  haproxy_tls_pem:
+    file: ./secrets/haproxy_tls.pem
+
+services:
+  haproxy:
+    <<: *common-constraints
+    build:
+      context: ./haproxy
+      dockerfile: Dockerfile
+    image: local/haproxy-with-tools:2.9
+    container_name: ${COMPOSE_PROJECT_NAME:-haproxy_stack}_haproxy
+
+    # Expose only what you need. 80 is the public entrypoint.
+    # 8406: healthz (no auth). 8404: Prometheus exporter. 8405: stats UI (basic auth).
+    ports:
+      - target: 80
+        published: ${HAPROXY_HTTP_PORT:-8080}
+        protocol: tcp
+        mode: host
+      - target: 8406
+        published: ${HAPROXY_HEALTH_PORT:-8406}
+        protocol: tcp
+        mode: host
+      - target: 8404
+        published: ${HAPROXY_METRICS_PORT:-8404}
+        protocol: tcp
+        mode: host
+      - target: 8405
+        published: ${HAPROXY_STATS_PORT:-8405}
+        protocol: tcp
+        mode: host
+
+    environment:
+      # The entrypoint supports both the plain env var and *_FILE secret pattern.
+      HAPROXY_STATS_USER: ${HAPROXY_STATS_USER:-admin}
+      HAPROXY_STATS_PASS_FILE: /run/secrets/haproxy_stats_password
+
+      # Optional: set the host name shown in the stats page.
+      HAPROXY_NODE_NAME: ${HAPROXY_NODE_NAME:-haproxy-01}
+
+      # Optional: enable verbose logging ("1" enables).
+      HAPROXY_DEBUG: ${HAPROXY_DEBUG:-0}
+
+      # Timezone (useful for logs)
+      TZ: ${TZ:-Europe/Zagreb}
+
+    secrets:
+      - haproxy_stats_password
+      # Optional TLS secret (only used if you enable TLS in the config template).
+      - haproxy_tls_pem
+
+    volumes:
+      # Config template + entrypoint that renders it.
+      - ./haproxy/haproxy.cfg.tmpl:/templates/haproxy.cfg.tmpl:ro
+      - ./haproxy/docker-entrypoint.sh:/docker-entrypoint.sh:ro
+
+      # Runtime socket + pid storage (named volume keeps permissions consistent).
+      - haproxy_run:/var/run/haproxy
+
+    networks:
+      - edge
+      - app
+
+    # Minimal capabilities: binding to low ports.
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+
+    security_opt: *default-security-opts
+
+    # Harden container filesystem.
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/lib/haproxy
+
+    # If you run on Linux and want a fixed UID/GID, set these in .env.
+    user: "${HAPROXY_UID:-99}:${HAPROXY_GID:-99}"
+
+    healthcheck:
+      # Uses the dedicated health endpoint (no auth) served by HAProxy itself.
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8406/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+
+  # Example upstream targets so you can validate load-balancing immediately.
+  # Replace these with your real services and/or attach HAProxy to external networks.
+  whoami1:
+    <<: *common-constraints
+    image: traefik/whoami:v1.10
+    container_name: ${COMPOSE_PROJECT_NAME:-haproxy_stack}_whoami1
+    networks:
+      - app
+
+  whoami2:
+    <<: *common-constraints
+    image: traefik/whoami:v1.10
+    container_name: ${COMPOSE_PROJECT_NAME:-haproxy_stack}_whoami2
+    networks:
+      - app
+
+  # Observability stack (optional). Enable with: docker compose --profile observability up -d
+  prometheus:
+    <<: *common-constraints
+    profiles: ["observability"]
+    image: prom/prometheus:v2.54.1
+    container_name: ${COMPOSE_PROJECT_NAME:-haproxy_stack}_prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - edge
+      - app
+
+  grafana:
+    <<: *common-constraints
+    profiles: ["observability"]
+    image: grafana/grafana:11.2.2
+    container_name: ${COMPOSE_PROJECT_NAME:-haproxy_stack}_grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD_FILE: /run/secrets/haproxy_stats_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:${GRAFANA_PORT:-3000}}
+      TZ: ${TZ:-Europe/Zagreb}
+    secrets:
+      - haproxy_stats_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - edge
+      - app

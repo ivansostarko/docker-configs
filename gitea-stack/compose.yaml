@@ -1,0 +1,212 @@
+name: gitea-stack
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+networks:
+  gitea_public:
+    name: gitea_public
+  gitea_internal:
+    name: gitea_internal
+    internal: true
+
+volumes:
+  gitea_data:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
+  runner_data:
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  gitea_admin_password:
+    file: ./secrets/gitea_admin_password.txt
+  gitea_metrics_token:
+    file: ./secrets/gitea_metrics_token.txt
+  gitea_runner_token:
+    file: ./secrets/gitea_runner_token.txt
+
+services:
+  gitea-db:
+    image: postgres:16-alpine
+    container_name: gitea-db
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - gitea_internal
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      TZ: ${TZ}
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h 127.0.0.1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  gitea:
+    image: gitea/gitea:${GITEA_IMAGE_TAG}
+    container_name: gitea
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      gitea-db:
+        condition: service_healthy
+    networks:
+      - gitea_public
+      - gitea_internal
+    ports:
+      - "${GITEA_HTTP_PORT}:3000"
+      - "${GITEA_SSH_PORT}:22"
+    environment:
+      TZ: ${TZ}
+      USER_UID: ${GITEA_UID}
+      USER_GID: ${GITEA_GID}
+
+      # Core server identity (set these correctly or you will break clone URLs)
+      GITEA__server__DOMAIN: ${GITEA_DOMAIN}
+      GITEA__server__ROOT_URL: ${GITEA_ROOT_URL}
+      GITEA__server__SSH_DOMAIN: ${GITEA_SSH_DOMAIN}
+      GITEA__server__SSH_PORT: ${GITEA_SSH_PORT}
+      GITEA__server__START_SSH_SERVER: "true"
+      GITEA__server__SSH_LISTEN_PORT: "22"
+      GITEA__server__HTTP_PORT: "3000"
+
+      # Database wiring (password injected via secrets in entrypoint wrapper)
+      GITEA__database__DB_TYPE: "postgres"
+      GITEA__database__HOST: "gitea-db:5432"
+      GITEA__database__NAME: ${POSTGRES_DB}
+      GITEA__database__USER: ${POSTGRES_USER}
+      GITEA__database__SSL_MODE: "disable"
+
+      # Security posture (don’t run an open signup forge unless you mean it)
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__service__DISABLE_REGISTRATION: ${GITEA_DISABLE_REGISTRATION}
+      GITEA__service__REQUIRE_SIGNIN_VIEW: ${GITEA_REQUIRE_SIGNIN_VIEW}
+
+      # Metrics + Actions toggles (token injected via secrets wrapper)
+      GITEA__metrics__ENABLED: "true"
+      GITEA__actions__ENABLED: ${GITEA_ACTIONS_ENABLED}
+
+    secrets:
+      - postgres_password
+      - gitea_metrics_token
+
+    volumes:
+      - gitea_data:/data
+      - ./gitea/conf/app.ini:/data/gitea/conf/app.ini:ro
+      - ./scripts/gitea-entrypoint-with-secrets.sh:/usr/local/bin/gitea-entrypoint-with-secrets.sh:ro
+      - /etc/localtime:/etc/localtime:ro
+
+    # Wrapper reads secrets, exports env vars, then chains to the image’s normal entrypoint.
+    entrypoint: ["/bin/sh", "/usr/local/bin/gitea-entrypoint-with-secrets.sh"]
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/healthz >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # One-shot admin bootstrap. Runs after Gitea is healthy.
+  gitea-init-admin:
+    image: gitea/gitea:${GITEA_IMAGE_TAG}
+    container_name: gitea-init-admin
+    restart: "no"
+    depends_on:
+      gitea:
+        condition: service_healthy
+    networks:
+      - gitea_internal
+    environment:
+      TZ: ${TZ}
+      GITEA_ADMIN_USER: ${GITEA_ADMIN_USER}
+      GITEA_ADMIN_EMAIL: ${GITEA_ADMIN_EMAIL}
+    secrets:
+      - gitea_admin_password
+    volumes:
+      - gitea_data:/data
+      - ./scripts/gitea-init-admin.sh:/usr/local/bin/gitea-init-admin.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/gitea-init-admin.sh"]
+
+  # ----------------------------
+  # OPTIONAL: Observability stack
+  # ----------------------------
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:v3.8.0
+    container_name: prometheus
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - gitea_internal
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+    secrets:
+      - gitea_metrics_token
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/healthy >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  grafana:
+    profiles: ["observability"]
+    image: grafana/grafana:12.2.2
+    container_name: grafana
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - gitea_internal
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+
+  # ----------------------------
+  # OPTIONAL: Actions runner
+  # ----------------------------
+  gitea-act-runner:
+    profiles: ["actions"]
+    image: vegardit/gitea-act-runner:latest
+    container_name: gitea-act-runner
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - gitea_internal
+    depends_on:
+      gitea:
+        condition: service_healthy
+    secrets:
+      - gitea_runner_token
+    environment:
+      TZ: ${TZ}
+      GITEA_INSTANCE_URL: ${GITEA_ROOT_URL}
+      GITEA_RUNNER_NAME: ${GITEA_RUNNER_NAME}
+      GITEA_RUNNER_REGISTRATION_TOKEN_FILE: /run/secrets/gitea_runner_token
+    volumes:
+      # If you mount docker.sock, your runner can control the host. Treat workflows as privileged code.
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+      - runner_data:/data

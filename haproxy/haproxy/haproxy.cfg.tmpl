@@ -1,0 +1,115 @@
+# Rendered by docker-entrypoint.sh via envsubst.
+# IMPORTANT: any ${VAR} tokens are expanded at container start.
+
+global
+  # Log to stdout for container-friendly logging.
+  log stdout format raw local0
+
+  # Expose an admin socket for debugging (restricted by filesystem permissions).
+  stats socket /var/run/haproxy/admin.sock mode 660 level admin expose-fd listeners
+
+  # In-container identity (matching Dockerfile user/group).
+  user haproxy
+  group haproxy
+
+  # Conservative SSL settings if you enable TLS later.
+  ssl-default-bind-options no-sslv3 no-tlsv10 no-tlsv11
+  ssl-default-bind-ciphers PROFILE=SYSTEM
+
+  # Display name in stats UI.
+  node ${HAPROXY_NODE_NAME}
+
+  # Raise if you have many upstreams.
+  maxconn 4000
+
+defaults
+  log global
+  mode http
+  option httplog
+  option dontlognull
+
+  timeout connect 5s
+  timeout client  60s
+  timeout server  60s
+  timeout http-request 10s
+
+  retries 3
+
+  # Reasonable defaults for reverse-proxying apps.
+  option http-keep-alive
+  option forwardfor
+
+# -----------------------------
+# Public entrypoint (HTTP)
+# -----------------------------
+frontend fe_http
+  bind :80
+
+  # Add standard proxy headers.
+  http-request set-header X-Forwarded-Proto http
+
+  default_backend be_apps
+
+# -----------------------------
+# Backends (replace with your real services)
+# -----------------------------
+backend be_apps
+  balance roundrobin
+
+  # Health checking (your upstreams should respond 200 on /health).
+  option httpchk GET /health
+  http-check expect status 200
+
+  # Example targets (from docker-compose). Replace these with your real upstreams.
+  server whoami1 whoami1:80 check inter 2s fall 3 rise 2
+  server whoami2 whoami2:80 check inter 2s fall 3 rise 2
+
+# -----------------------------
+# Internal health endpoint (no auth)
+# -----------------------------
+frontend fe_health
+  bind :8406
+  http-request return status 200 content-type text/plain lf-string "ok\n"
+
+# -----------------------------
+# Stats UI (basic auth)
+# Access: http://<host>:8405/stats
+# -----------------------------
+listen stats
+  bind :8405
+  mode http
+
+  stats enable
+  stats uri /stats
+  stats refresh 10s
+  stats show-legends
+  stats show-node
+
+  # Basic auth
+  stats auth ${HAPROXY_STATS_USER}:${HAPROXY_STATS_PASS}
+
+# -----------------------------
+# Prometheus exporter
+# Access: http://<host>:8404/metrics
+# -----------------------------
+frontend fe_metrics
+  bind :8404
+  mode http
+
+  # Built-in exporter.
+  http-request use-service prometheus-exporter if { path /metrics }
+
+# -----------------------------
+# OPTIONAL: TLS termination (HTTPS)
+# -----------------------------
+# 1) Put a PEM bundle at ./secrets/haproxy_tls.pem (cert + key) and ensure secret exists.
+# 2) Uncomment the below frontend and optionally redirect HTTP->HTTPS.
+#
+# frontend fe_https
+#   bind :443 ssl crt /run/secrets/haproxy_tls_pem alpn h2,http/1.1
+#   http-request set-header X-Forwarded-Proto https
+#   default_backend be_apps
+#
+# frontend fe_http
+#   bind :80
+#   http-request redirect scheme https code 301 if !{ ssl_fc }

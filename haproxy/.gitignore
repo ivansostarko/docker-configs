@@ -1,0 +1,9 @@
+.env
+
+# Never commit real secrets
+secrets/*
+!secrets/README.md
+
+# Local data volumes (if you bind-mount these instead of named volumes)
+prometheus_data
+grafana_data

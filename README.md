@@ -13,13 +13,14 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 
 ### Programming languages
 - [PHP](/php/README.md)
+- [PHP Apache](/php-apache/README.md)
 - [NodeJS](/nodejs/README.md)
 
 ### Frameworks
 - [Laravel](/laravel/README.md)
 - [Java Spring Boot](/java-spring/README.md)
 - [Flutter](/flutter/README.md)
-
+- [Angular](/angular/README.md)
 
 
 ### Web servers
@@ -34,7 +35,19 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [MariaDB](/mariadb/README.md)
 - [MongoDB](/mongodb/README.md)
 - [Redis](/redis/README.md)
-- [MindDB](/minddb/README.md)
+- [MindsDB](/mindsdb/README.md)
+- [Elasticsearch](/elasticsearch/README.md)
+
+### Databases Replications
+- [MongoDB Replica](/mongodb-replica/README.md)
+- [MySql Replication](/mysql-replication/README.md)
+- [Postgres Replication](/postgres-replication/README.md)
+
+
+### Logs
+- [Kibana](/kibana/README.md)
+- [Logstash](/logstash/README.md)
+
 
 ### Status Page
 - [CachetHq](/cachethq/README.md)
@@ -90,6 +103,9 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 
 ### Security
 - [Infisical](/infisical/README.md)
+
+### Auth
+- [Keycloak](/keycloak/README.md)
 
 ### Backup
 - [MySql Backup](/mysql-backup/README.md)

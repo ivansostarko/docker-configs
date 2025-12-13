@@ -1,0 +1,234 @@
+name: gitlab-stack
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+networks:
+  gitlab-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${GITLAB_SUBNET}
+
+volumes:
+  postgres-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+
+secrets:
+  gitlab_root_password:
+    file: ./secrets/gitlab_root_password.txt
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  redis_password:
+    file: ./secrets/redis_password.txt
+
+services:
+  postgres:
+    image: postgres:${POSTGRES_IMAGE_TAG}
+    container_name: gitlab-postgres
+    restart: unless-stopped
+    shm_size: 256mb
+    networks:
+      gitlab-net:
+        ipv4_address: ${POSTGRES_IP}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+    logging: *default-logging
+
+  redis:
+    image: redis:${REDIS_IMAGE_TAG}
+    container_name: gitlab-redis
+    restart: unless-stopped
+    networks:
+      gitlab-net:
+        ipv4_address: ${REDIS_IP}
+    secrets:
+      - redis_password
+    command:
+      - sh
+      - -c
+      - |
+        exec redis-server           --appendonly yes           --requirepass "$$(cat /run/secrets/redis_password)"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a "$$(cat /run/secrets/redis_password)" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    logging: *default-logging
+
+  gitlab:
+    image: ${GITLAB_IMAGE}:${GITLAB_IMAGE_TAG}
+    container_name: gitlab
+    restart: unless-stopped
+    hostname: ${GITLAB_HOSTNAME}
+    shm_size: "256m"
+    networks:
+      gitlab-net:
+        ipv4_address: ${GITLAB_IP}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    ports:
+      - "${GITLAB_HTTP_PORT}:80"
+      - "${GITLAB_HTTPS_PORT}:443"
+      - "${GITLAB_SSH_PORT}:22"
+      - "${GITLAB_REGISTRY_PORT}:5050"
+
+    volumes:
+      - ${GITLAB_HOME}/config:/etc/gitlab
+      - ${GITLAB_HOME}/logs:/var/log/gitlab
+      - ${GITLAB_HOME}/data:/var/opt/gitlab
+
+    secrets:
+      - gitlab_root_password
+      - postgres_password
+      - redis_password
+
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url '${GITLAB_EXTERNAL_URL}'
+
+        gitlab_rails['gitlab_shell_ssh_port'] = ${GITLAB_SSH_PORT}
+        gitlab_rails['time_zone'] = '${TZ}'
+
+        postgresql['enable'] = false
+        redis['enable'] = false
+
+        gitlab_rails['db_adapter']  = 'postgresql'
+        gitlab_rails['db_encoding'] = 'unicode'
+        gitlab_rails['db_host']     = '${POSTGRES_HOST}'
+        gitlab_rails['db_port']     = ${POSTGRES_PORT}
+        gitlab_rails['db_database'] = '${POSTGRES_DB}'
+        gitlab_rails['db_username'] = '${POSTGRES_USER}'
+        gitlab_rails['db_password'] = File.read('/run/secrets/postgres_password').strip
+
+        gitlab_rails['redis_host']     = '${REDIS_HOST}'
+        gitlab_rails['redis_port']     = ${REDIS_PORT}
+        gitlab_rails['redis_password'] = File.read('/run/secrets/redis_password').strip
+
+        gitlab_rails['initial_root_password'] = File.read('/run/secrets/gitlab_root_password').strip
+
+        gitlab_rails['monitoring_whitelist'] = ['127.0.0.0/8', '${GITLAB_SUBNET}']
+
+        nginx['listen_https'] = false
+        nginx['listen_port']  = 80
+
+        # OPTIONAL: Container Registry
+        # registry_external_url '${GITLAB_REGISTRY_EXTERNAL_URL}'
+        # gitlab_rails['registry_enabled'] = true
+        # registry['enable'] = true
+        # registry_nginx['listen_port'] = 5050
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost/-/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 5m
+
+    logging: *default-logging
+
+  prometheus:
+    image: prom/prometheus:${PROMETHEUS_IMAGE_TAG}
+    container_name: gitlab-prometheus
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    networks:
+      gitlab-net:
+        ipv4_address: ${PROMETHEUS_IP}
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/ready >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    logging: *default-logging
+
+  postgres_exporter:
+    image: prometheuscommunity/postgres-exporter:${POSTGRES_EXPORTER_IMAGE_TAG}
+    container_name: gitlab-postgres-exporter
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    networks:
+      gitlab-net: {}
+    secrets:
+      - postgres_password
+    command:
+      - sh
+      - -c
+      - |
+        export DATA_SOURCE_NAME="postgresql://${POSTGRES_USER}:$$(cat /run/secrets/postgres_password)@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?sslmode=disable"
+        exec /bin/postgres_exporter
+    ports:
+      - "${POSTGRES_EXPORTER_PORT}:9187"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *default-logging
+
+  redis_exporter:
+    image: oliver006/redis_exporter:${REDIS_EXPORTER_IMAGE_TAG}
+    container_name: gitlab-redis-exporter
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    networks:
+      gitlab-net: {}
+    secrets:
+      - redis_password
+    command:
+      - sh
+      - -c
+      - |
+        exec /redis_exporter --redis.addr=redis://${REDIS_HOST}:${REDIS_PORT} --redis.password="$$(cat /run/secrets/redis_password)"
+    ports:
+      - "${REDIS_EXPORTER_PORT}:9121"
+    depends_on:
+      redis:
+        condition: service_healthy
+    logging: *default-logging
+
+  grafana:
+    image: grafana/grafana:${GRAFANA_IMAGE_TAG}
+    container_name: gitlab-grafana
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    networks:
+      gitlab-net: {}
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q ok"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    logging: *default-logging
