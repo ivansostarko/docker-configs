@@ -1,0 +1,193 @@
+name: asterix
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ------------------------
+  # Mattermost Postgres DB
+  # ------------------------
+  mattermost-db:
+    image: postgres:15-alpine
+    container_name: mattermost-db
+    hostname: mattermost-db
+    restart: unless-stopped
+
+    # Keep DB off your shared app network. Only Mattermost (and exporters) should reach it.
+    networks:
+      - mattermost_internal
+
+    environment:
+      POSTGRES_USER: ${MM_DB_USER}
+      POSTGRES_DB: ${MM_DB_NAME}
+      # Use Docker secret instead of plain env var.
+      POSTGRES_PASSWORD_FILE: /run/secrets/mm_db_password
+
+      # Optional: enforce consistent encoding/collation.
+      # POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
+
+    secrets:
+      - mm_db_password
+
+    volumes:
+      - mattermost_db_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MM_DB_USER} -d ${MM_DB_NAME} -h 127.0.0.1 -p 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+    logging: *default-logging
+
+
+  # ------------------------
+  # Mattermost (Team Edition)
+  # ------------------------
+  mattermost:
+    # Do NOT run :latest in production. Pin and upgrade deliberately.
+    image: mattermost/mattermost-team-edition:${MM_IMAGE_TAG}
+    container_name: mattermost
+    hostname: mattermost
+    restart: unless-stopped
+
+    depends_on:
+      mattermost-db:
+        condition: service_healthy
+
+    # Publish only if you are not using a reverse proxy.
+    # If you use Traefik/Nginx, remove this and attach Mattermost to that proxy network.
+    ports:
+      - "${MM_PORT:-8065}:8065"
+
+    env_file:
+      - .env
+
+    # Minimal + explicit settings. Keep the rest in config.json/System Console.
+    environment:
+      MM_SQLSETTINGS_DRIVERNAME: "postgres"
+
+      # Basic config
+      MM_SERVICESETTINGS_SITEURL: ${MM_SERVICESETTINGS_SITEURL}
+      MM_SERVICESETTINGS_ENABLEINCOMINGWEBHOOKS: ${MM_SERVICESETTINGS_ENABLEINCOMINGWEBHOOKS:-true}
+      MM_SERVICESETTINGS_ENABLEOUTGOINGWEBHOOKS: ${MM_SERVICESETTINGS_ENABLEOUTGOINGWEBHOOKS:-true}
+      MM_SERVICESETTINGS_ENABLECOMMANDS: ${MM_SERVICESETTINGS_ENABLECOMMANDS:-true}
+      MM_SERVICESETTINGS_ENABLECUSTOMEMOJI: ${MM_SERVICESETTINGS_ENABLECUSTOMEMOJI:-true}
+      MM_SERVICESETTINGS_ENABLELINKPREVIEWS: ${MM_SERVICESETTINGS_ENABLELINKPREVIEWS:-true}
+
+      # Optional: metrics (Performance Monitoring)
+      MM_METRICSSETTINGS_ENABLE: ${MM_METRICS_ENABLE:-false}
+      MM_METRICSSETTINGS_LISTENADDRESS: ":8067"
+
+      # Optional: log level
+      MM_LOGSETTINGS_CONSOLELEVEL: ${MM_LOG_LEVEL:-INFO}
+
+      # DB fields used by entrypoint to assemble MM_SQLSETTINGS_DATASOURCE
+      MM_DB_HOST: ${MM_DB_HOST:-mattermost-db}
+      MM_DB_PORT: ${MM_DB_PORT:-5432}
+      MM_DB_NAME: ${MM_DB_NAME}
+      MM_DB_USER: ${MM_DB_USER}
+
+    # Harden the container a bit. If something breaks, add back caps deliberately.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    stop_grace_period: 2m
+
+    # Persist the important paths
+    volumes:
+      - mattermost_data:/mattermost/data
+      - mattermost_logs:/mattermost/logs
+      - mattermost_config:/mattermost/config
+      - mattermost_plugins:/mattermost/plugins
+      - mattermost_client_plugins:/mattermost/client/plugins
+
+    # Join your existing shared network for reachability (reverse proxy, etc.)
+    # but keep DB traffic on the internal network.
+    networks:
+      - asterix_network
+      - mattermost_internal
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8065/api/v4/system/ping >/dev/null || wget -qO- http://127.0.0.1:8065/api/v4/system/ping >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+
+    # Build MM_SQLSETTINGS_DATASOURCE from secret at runtime (no DB password in .env).
+    entrypoint: ["/bin/sh", "/opt/mattermost-entrypoint/entrypoint.sh"]
+
+    configs:
+      - source: mattermost_entrypoint
+        target: /opt/mattermost-entrypoint/entrypoint.sh
+        mode: 0555
+
+    secrets:
+      - mm_db_password
+
+    logging: *default-logging
+
+
+  # ------------------------
+  # OPTIONAL: Postgres metrics exporter (Prometheus)
+  # ------------------------
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:latest
+    container_name: mattermost-postgres-exporter
+    restart: unless-stopped
+    depends_on:
+      mattermost-db:
+        condition: service_healthy
+    networks:
+      - mattermost_internal
+
+    # Expose only on internal networks; Prometheus should scrape it privately.
+    # ports:
+    #   - "9187:9187"
+
+    environment:
+      DATA_SOURCE_URI: "mattermost-db:5432/${MM_DB_NAME}?sslmode=disable"
+      DATA_SOURCE_USER: "${MM_DB_USER}"
+      DATA_SOURCE_PASS_FILE: "/run/secrets/mm_db_password"
+
+    secrets:
+      - mm_db_password
+
+    logging: *default-logging
+
+
+configs:
+  mattermost_entrypoint:
+    file: ./config/mattermost/entrypoint.sh
+
+secrets:
+  mm_db_password:
+    file: ./secrets/mm_db_password.txt
+
+volumes:
+  mattermost_db_data:
+  mattermost_data:
+  mattermost_logs:
+  mattermost_config:
+  mattermost_plugins:
+  mattermost_client_plugins:
+
+networks:
+  # Your existing network (external) used across the stack
+  asterix_network:
+    external: true
+
+  # Private network: DB + app + exporters only
+  mattermost_internal:
+    driver: bridge
+    internal: true

@@ -1,0 +1,119 @@
+name: asterix
+
+x-logging: &default_logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ------------------------
+  # Ollama
+  # ------------------------
+  ollama:
+    image: ollama/ollama:latest
+    hostname: ollama
+    # Avoid container_name if you ever want replicas/scale.
+    # container_name: ollama
+
+    pull_policy: always
+    restart: unless-stopped
+    init: true
+
+    # Safer default: bind to localhost unless you explicitly choose otherwise.
+    ports:
+      - "${OLLAMA_BIND:-127.0.0.1}:${OLLAMA_PORT:-11434}:11434"
+
+    env_file:
+      - .env
+    environment:
+      # Listen on container NIC; host binding is controlled by ports above.
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_MODELS=/models
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-5m}
+      # Optional: restrict browser-based callers (CORS origins)
+      - OLLAMA_ORIGINS=${OLLAMA_ORIGINS:-}
+
+      # Optional proxies for pulling models
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-}
+
+      # Optional: if you use ollama.com cloud/private models:
+      # - OLLAMA_API_KEY=${OLLAMA_API_KEY}
+
+    volumes:
+      - ollama_models:/models
+      - ./config/ollama:/config/ollama:ro
+
+    networks:
+      - asterix_network
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:11434/api/tags >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+    stop_signal: SIGTERM
+    stop_grace_period: 60s
+
+    # Resource controls (tune for your host)
+    mem_limit: ${OLLAMA_MEM_LIMIT:-8g}
+    pids_limit: ${OLLAMA_PIDS_LIMIT:-4096}
+    shm_size: "1g"
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    security_opt:
+      - no-new-privileges:true
+
+    logging: *default_logging
+
+    # GPU reservation (NVIDIA). Remove if CPU-only or not using NVIDIA toolkit.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${OLLAMA_GPU_COUNT:-1}
+              capabilities: [gpu]
+
+  # ------------------------
+  # Ollama Prometheus Exporter (optional)
+  # ------------------------
+  # Enable with: docker compose --profile metrics up -d
+  ollama-exporter:
+    image: lucabecker42/ollama-exporter:latest
+    hostname: ollama-exporter
+    restart: unless-stopped
+    profiles: ["metrics"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    command:
+      - "--ollama.url=http://ollama:11434"
+      - "--web.listen-address=:${OLLAMA_EXPORTER_PORT:-8000}"
+    ports:
+      - "${OLLAMA_EXPORTER_BIND:-127.0.0.1}:${OLLAMA_EXPORTER_PORT:-8000}:${OLLAMA_EXPORTER_PORT:-8000}"
+    networks:
+      - asterix_network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${OLLAMA_EXPORTER_PORT:-8000}/health >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    logging: *default_logging
+
+networks:
+  asterix_network:
+    name: asterix_network
+    driver: bridge
+    attachable: true
+
+volumes:
+  ollama_models:
+    name: ollama_models

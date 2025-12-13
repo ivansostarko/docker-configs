@@ -1,0 +1,152 @@
+services:
+  # ------------------------
+  # MinIO (S3-compatible object storage)
+  # ------------------------
+  minio:
+    # Pin to an explicit tag. "latest" is not acceptable in anything you care about.
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: minio
+    hostname: minio
+    restart: unless-stopped
+
+    command: >
+      server /data
+      --address ":9000"
+      --console-address ":9001"
+
+    env_file:
+      - .env
+
+    environment:
+      # Root credentials via Docker secrets (file-based env pattern).
+      MINIO_ROOT_USER_FILE: /run/secrets/minio_root_user
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_root_password
+
+      # Public URLs (important behind reverse proxy / TLS)
+      MINIO_SERVER_URL: ${MINIO_SERVER_URL}
+      MINIO_BROWSER_REDIRECT_URL: ${MINIO_BROWSER_REDIRECT_URL}
+
+      # Optional: region + storage class examples
+      MINIO_REGION_NAME: ${MINIO_REGION_NAME}
+      MINIO_STORAGE_CLASS_STANDARD: ${MINIO_STORAGE_CLASS_STANDARD}
+
+      # Metrics auth mode:
+      # - jwt (recommended): Prometheus must use a bearer token generated via `mc admin prometheus generate`.
+      # - public (testing only): disables auth on metrics endpoints.
+      MINIO_PROMETHEUS_AUTH_TYPE: ${MINIO_PROMETHEUS_AUTH_TYPE}
+
+    ports:
+      - "${MINIO_API_PORT}:9000"   # S3 API
+      - "${MINIO_WEB_PORT}:9001"   # Console
+
+    volumes:
+      - minio_data:/data
+      - minio_config:/root/.minio
+
+      # Optional: mount TLS certs (MinIO expects /certs/private.key and /certs/public.crt for the default cert)
+      - ./certs/minio:/certs:ro
+
+      # Optional: provisioning artifacts (policies, lifecycle JSON, etc.)
+      - ./config/minio:/etc/minio:ro
+
+    secrets:
+      - minio_root_user
+      - minio_root_password
+
+    networks:
+      - asterix_network
+
+    # Security hardening defaults
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    # Root filesystem can be read-only if all write paths are on volumes/tmpfs
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+
+    # Healthcheck note:
+    # Some MinIO images do not ship with curl/wget. If this healthcheck fails, either:
+    #  - remove it and use external probing, or
+    #  - build a tiny derived image that includes curl/wget.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ------------------------
+  # MinIO provisioning (buckets/policies/metrics token generation)
+  # ------------------------
+  minio-init:
+    image: minio/mc:RELEASE.2025-07-21T05-28-08Z
+    container_name: minio-init
+    depends_on:
+      - minio
+    restart: "no"
+    env_file:
+      - .env
+    secrets:
+      - minio_root_user
+      - minio_root_password
+    volumes:
+      # Store generated artifacts (e.g., Prometheus scrape config snippet with bearer token)
+      - ./config/minio/generated:/generated
+      # Optional: policy JSONs you want to apply
+      - ./config/minio/policies:/policies:ro
+    networks:
+      - asterix_network
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      set -eu;
+
+      ROOT_USER="$$(cat /run/secrets/minio_root_user)";
+      ROOT_PASS="$$(cat /run/secrets/minio_root_password)";
+
+      echo "Waiting for MinIO...";
+      until mc alias set local http://minio:9000 "$$ROOT_USER" "$$ROOT_PASS" >/dev/null 2>&1; do
+        sleep 2;
+      done;
+
+      # Buckets (idempotent)
+      if [ -n "${MINIO_DEFAULT_BUCKET:-}" ]; then
+        mc mb --ignore-existing "local/${MINIO_DEFAULT_BUCKET}";
+      fi;
+
+      # Example: apply a policy if you mount one
+      # mc admin policy create local readonly /policies/readonly.json || true;
+
+      # Metrics: generate a Prometheus scrape snippet with bearer token (jwt mode)
+      if [ "${MINIO_PROMETHEUS_AUTH_TYPE:-jwt}" = "jwt" ]; then
+        mc admin prometheus generate local > /generated/prometheus_minio_scrape.yml;
+        echo "Wrote /generated/prometheus_minio_scrape.yml (contains bearer token).";
+      else
+        echo "MINIO_PROMETHEUS_AUTH_TYPE=public; no token generation needed.";
+      fi;
+
+      echo "MinIO init done."
+
+networks:
+  asterix_network:
+    name: asterix_network
+    driver: bridge
+
+volumes:
+  minio_data:
+  minio_config:
+
+secrets:
+  minio_root_user:
+    file: ./secrets/minio_root_user.txt
+  minio_root_password:
+    file: ./secrets/minio_root_password.txt
