@@ -1,0 +1,440 @@
+version: "3.9"
+
+name: laravel12-platform
+
+x-app-common: &app-common
+  build:
+    context: .
+  image: laravel12-frankenphp:local
+  working_dir: /app
+  env_file:
+    - .env
+  environment:
+    TZ: ${TZ:-Europe/Zagreb}
+  volumes:
+    - ./:/app:delegated
+    - app_vendor:/app/vendor
+    - app_storage:/app/storage
+    - ./docker/php/99-custom.ini:/usr/local/etc/php/conf.d/99-custom.ini:ro
+  networks:
+    - app_net
+  depends_on:
+    redis:
+      condition: service_healthy
+    typesense:
+      condition: service_healthy
+
+services:
+  # ------------------------
+  # Laravel Octane (FrankenPHP)
+  # ------------------------
+  app:
+    <<: *app-common
+    ports:
+      - "${APP_HTTP_PORT:-8000}:8000"
+    command: >
+      sh -lc "
+        php -v &&
+        php artisan key:generate --force || true &&
+        php artisan config:clear || true &&
+        php artisan octane:frankenphp
+          --host=0.0.0.0
+          --port=8000
+          --admin-port=2019
+          --workers=${OCTANE_WORKERS:-auto}
+          --max-requests=${OCTANE_MAX_REQUESTS:-500}
+          ${OCTANE_WATCH:+--watch}
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/up >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+
+  # ------------------------
+  # Reverb (WebSockets)
+  # ------------------------
+  reverb:
+    <<: *app-common
+    profiles: ["realtime"]
+    ports:
+      - "${REVERB_PORT:-8080}:8080"
+    command: >
+      sh -lc "
+        php artisan reverb:start --host=0.0.0.0 --port=8080
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+
+  # ------------------------
+  # Scheduler
+  # ------------------------
+  scheduler:
+    <<: *app-common
+    command: >
+      sh -lc "
+        php artisan schedule:work
+      "
+    restart: unless-stopped
+
+  # ------------------------
+  # Queues (enable via profiles)
+  # ------------------------
+  horizon:
+    <<: *app-common
+    profiles: ["queue-redis"]
+    command: >
+      sh -lc "
+        php artisan horizon
+      "
+    restart: unless-stopped
+
+  queue_worker_beanstalkd:
+    <<: *app-common
+    profiles: ["queue-beanstalkd"]
+    depends_on:
+      beanstalkd:
+        condition: service_healthy
+    command: >
+      sh -lc "
+        php artisan queue:work beanstalkd --sleep=1 --tries=3 --timeout=90
+      "
+    restart: unless-stopped
+
+  queue_worker_rabbitmq:
+    <<: *app-common
+    profiles: ["queue-rabbitmq"]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    command: >
+      sh -lc "
+        php artisan queue:work rabbitmq --sleep=1 --tries=3 --timeout=90
+      "
+    restart: unless-stopped
+
+  queue_worker_kafka:
+    <<: *app-common
+    profiles: ["queue-kafka"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command: >
+      sh -lc "
+        php artisan queue:work kafka --sleep=1 --tries=3 --timeout=90
+      "
+    restart: unless-stopped
+
+  # ------------------------
+  # Composer / Artisan / Tests (ephemeral)
+  # ------------------------
+  composer:
+    image: composer:2
+    profiles: ["devtools"]
+    working_dir: /app
+    volumes:
+      - ./:/app:delegated
+      - app_vendor:/app/vendor
+    networks:
+      - app_net
+    entrypoint: ["composer"]
+
+  artisan:
+    <<: *app-common
+    profiles: ["devtools"]
+    entrypoint: ["php", "artisan"]
+
+  test:
+    <<: *app-common
+    profiles: ["devtools"]
+    command: >
+      sh -lc "
+        php -d memory_limit=-1 vendor/bin/pest || php -d memory_limit=-1 vendor/bin/phpunit
+      "
+
+  # ------------------------
+  # Redis (cache + sessions + queues)
+  # ------------------------
+  redis:
+    image: redis:7-alpine
+    command: >
+      sh -lc "
+        redis-server
+          --appendonly yes
+          --requirepass "$$(cat /run/secrets/redis_password)"
+      "
+    secrets:
+      - redis_password
+    volumes:
+      - redis_data:/data
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a "$$(cat /run/secrets/redis_password)" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ------------------------
+  # Typesense (Scout)
+  # ------------------------
+  typesense:
+    image: typesense/typesense:0.26.0
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    volumes:
+      - typesense_data:/data
+      - ./docker/typesense/entrypoint.sh:/entrypoint.sh:ro
+    secrets:
+      - typesense_api_key
+    environment:
+      TYPESENSE_DATA_DIR: /data
+    networks:
+      - app_net
+    ports:
+      - "${TYPESENSE_PORT:-8108}:8108"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8108/health | grep -q ok"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
+  # ------------------------
+  # Databases (enable via profiles)
+  # ------------------------
+  mysql:
+    image: mysql:8.4
+    profiles: ["db-mysql"]
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE:-laravel}
+      MYSQL_USER: ${DB_USERNAME:-laravel}
+      MYSQL_PASSWORD_FILE: /run/secrets/mysql_password
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+    secrets:
+      - mysql_password
+      - mysql_root_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - app_net
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p"$$(cat /run/secrets/mysql_root_password)" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  mariadb:
+    image: mariadb:11
+    profiles: ["db-mariadb"]
+    environment:
+      MARIADB_DATABASE: ${DB_DATABASE:-laravel}
+      MARIADB_USER: ${DB_USERNAME:-laravel}
+      MARIADB_PASSWORD_FILE: /run/secrets/mariadb_password
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/mariadb_root_password
+    secrets:
+      - mariadb_password
+      - mariadb_root_password
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    networks:
+      - app_net
+    ports:
+      - "${MARIADB_PORT:-3307}:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h localhost -uroot -p"$$(cat /run/secrets/mariadb_root_password)" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  mongo:
+    image: mongo:7
+    profiles: ["db-mongo"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-root}
+      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/mongo_root_password
+    secrets:
+      - mongo_root_password
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - app_net
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok' | grep -q 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  # ------------------------
+  # Beanstalkd
+  # ------------------------
+  beanstalkd:
+    image: schickling/beanstalkd:latest
+    profiles: ["queue-beanstalkd"]
+    networks:
+      - app_net
+    ports:
+      - "${BEANSTALKD_PORT:-11300}:11300"
+    healthcheck:
+      test: ["CMD-SHELL", "sh -lc "(echo stats; sleep 1) | nc -w 2 localhost 11300 | grep -q 'OK'""]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  # ------------------------
+  # RabbitMQ
+  # ------------------------
+  rabbitmq:
+    image: rabbitmq:3-management
+    profiles: ["queue-rabbitmq"]
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-laravel}
+      RABBITMQ_DEFAULT_PASS_FILE: /run/secrets/rabbitmq_password
+    secrets:
+      - rabbitmq_password
+    networks:
+      - app_net
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_UI_PORT:-15672}:15672"
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  # ------------------------
+  # Kafka (KRaft mode)
+  # ------------------------
+  kafka:
+    image: bitnami/kafka:latest
+    profiles: ["queue-kafka"]
+    networks:
+      - app_net
+    ports:
+      - "${KAFKA_PORT:-9092}:9092"
+    environment:
+      KAFKA_ENABLE_KRAFT: "yes"
+      KAFKA_CFG_NODE_ID: "1"
+      KAFKA_CFG_PROCESS_ROLES: "broker,controller"
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
+      KAFKA_CFG_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    volumes:
+      - kafka_data:/bitnami/kafka
+    healthcheck:
+      test: ["CMD-SHELL", "bash -lc "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1""]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
+  # ------------------------
+  # Logstash (optional)
+  # ------------------------
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.19.8
+    profiles: ["logging"]
+    networks:
+      - app_net
+    ports:
+      - "${LOGSTASH_TCP_PORT:-5000}:5000"
+      - "${LOGSTASH_API_PORT:-9600}:9600"
+    volumes:
+      - ./docker/logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - ./docker/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9600/_node/pipelines >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  # ------------------------
+  # Prometheus / Grafana (optional)
+  # ------------------------
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    profiles: ["monitoring"]
+    networks:
+      - app_net
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    profiles: ["monitoring"]
+    networks:
+      - app_net
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+
+  redis_exporter:
+    image: oliver006/redis_exporter:v1.66.0
+    profiles: ["monitoring"]
+    networks:
+      - app_net
+    environment:
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+    secrets:
+      - redis_password
+    ports:
+      - "${REDIS_EXPORTER_PORT:-9121}:9121"
+
+networks:
+  app_net:
+    driver: bridge
+
+volumes:
+  app_vendor:
+  app_storage:
+  redis_data:
+  mysql_data:
+  mariadb_data:
+  mongo_data:
+  typesense_data:
+  kafka_data:
+  prometheus_data:
+  grafana_data:
+
+secrets:
+  app_key:
+    file: ./secrets/app_key.txt
+  redis_password:
+    file: ./secrets/redis_password.txt
+  mysql_root_password:
+    file: ./secrets/mysql_root_password.txt
+  mysql_password:
+    file: ./secrets/mysql_password.txt
+  mariadb_root_password:
+    file: ./secrets/mariadb_root_password.txt
+  mariadb_password:
+    file: ./secrets/mariadb_password.txt
+  mongo_root_password:
+    file: ./secrets/mongo_root_password.txt
+  typesense_api_key:
+    file: ./secrets/typesense_api_key.txt
+  rabbitmq_password:
+    file: ./secrets/rabbitmq_password.txt
+  sentry_dsn:
+    file: ./secrets/sentry_dsn.txt
