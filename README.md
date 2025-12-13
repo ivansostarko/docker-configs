@@ -79,7 +79,7 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 
 ### Observability
 - [Jaeger](/jaeger/README.md)
-- [OpenTelemetry](/OpenTelemetry/README.md)
+- [OpenTelemetry](/otel/README.md)
  
 
 ### Git

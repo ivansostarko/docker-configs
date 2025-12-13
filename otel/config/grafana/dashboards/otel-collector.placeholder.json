@@ -1,0 +1,19 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "iteration": 1,
+  "panels": [],
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["opentelemetry", "collector"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "OTel Collector (placeholder)",
+  "uid": "otelcol-placeholder",
+  "version": 1
+}

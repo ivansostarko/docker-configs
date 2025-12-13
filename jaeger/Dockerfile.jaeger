@@ -1,0 +1,5 @@
+ARG JAEGER_VERSION=1.76.0
+FROM jaegertracing/all-in-one:${JAEGER_VERSION}
+
+# Jaeger images are often minimal; add a single static busybox binary for HEALTHCHECK tooling.
+COPY --from=busybox:1.36.1 /bin/busybox /busybox

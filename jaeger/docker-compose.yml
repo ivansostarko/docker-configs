@@ -1,0 +1,159 @@
+name: jaeger-stack
+
+services:
+  jaeger:
+    # Build a tiny wrapper image so Docker healthchecks can run (busybox wget)
+    build:
+      context: .
+      dockerfile: Dockerfile.jaeger
+      args:
+        JAEGER_VERSION: ${JAEGER_VERSION}
+    image: local/jaeger-all-in-one:${JAEGER_VERSION}-hc
+    container_name: jaeger
+    restart: unless-stopped
+
+    environment:
+      TZ: ${TZ}
+
+      # Storage:
+      # - "memory" is default but loses data on restart
+      # - "badger" persists locally (best for single-node)
+      SPAN_STORAGE_TYPE: ${JAEGER_SPAN_STORAGE_TYPE}
+      BADGER_EPHEMERAL: ${JAEGER_BADGER_EPHEMERAL}
+      BADGER_DIRECTORY_VALUE: /badger/data
+      BADGER_DIRECTORY_KEY: /badger/key
+
+      # Receivers:
+      COLLECTOR_OTLP_ENABLED: "true"
+      # Zipkin receiver is disabled by default; enabling requires setting host:port
+      COLLECTOR_ZIPKIN_HOST_PORT: ":9411"
+
+      # Optional: disable Jaeger self-tracing (can clutter UI in small setups)
+      OTEL_TRACES_SAMPLER: ${JAEGER_SELF_TRACING_SAMPLER}
+
+    command:
+      # Sampling strategies served to clients using remote sampling
+      - "--sampling.strategies-file=/etc/jaeger/sampling_strategies.json"
+      - "--sampling.strategies-reload-interval=${JAEGER_SAMPLING_RELOAD_INTERVAL}"
+
+      # Badger settings (only meaningful when SPAN_STORAGE_TYPE=badger)
+      - "--badger.ephemeral=${JAEGER_BADGER_EPHEMERAL}"
+      - "--badger.directory-value=/badger/data"
+      - "--badger.directory-key=/badger/key"
+
+      # Admin HTTP server (health at /, metrics at /metrics)
+      - "--admin.http.host-port=:14269"
+      - "--log-level=${JAEGER_LOG_LEVEL}"
+
+    volumes:
+      - jaeger_badger:/badger
+      - ./config/jaeger/sampling_strategies.json:/etc/jaeger/sampling_strategies.json:ro
+
+    # Expose ONLY what you use.
+    ports:
+      # UI
+      - "${JAEGER_UI_PORT}:16686"
+
+      # OTLP (recommended for OpenTelemetry SDKs)
+      - "${JAEGER_OTLP_GRPC_PORT}:4317"
+      - "${JAEGER_OTLP_HTTP_PORT}:4318"
+
+      # Admin (health + metrics)
+      - "${JAEGER_ADMIN_PORT}:14269"
+
+      # Optional legacy / compatibility ports (enable if needed)
+      - "${JAEGER_COLLECTOR_HTTP_PORT}:14268"      # Jaeger thrift HTTP
+      - "${JAEGER_COLLECTOR_GRPC_PORT}:14250"      # Jaeger gRPC (model.proto)
+      - "${JAEGER_ZIPKIN_PORT}:9411"               # Zipkin
+
+      # Optional agent ports (rarely needed in new deployments)
+      - "${JAEGER_AGENT_UDP_COMPACT_PORT}:6831/udp"
+      - "${JAEGER_AGENT_UDP_BINARY_PORT}:6832/udp"
+      - "${JAEGER_AGENT_CONFIG_PORT}:5778"
+
+    # Real in-container healthcheck against admin endpoint (/)
+    healthcheck:
+      test: ["CMD", "/busybox", "wget", "-qO-", "http://127.0.0.1:14269/"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+
+    networks:
+      - observability
+
+  prometheus:
+    image: prom/prometheus:${PROMETHEUS_VERSION}
+    container_name: prometheus
+    restart: unless-stopped
+    profiles: ["metrics"]
+    depends_on:
+      jaeger:
+        condition: service_healthy
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/healthy >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+    networks:
+      - observability
+
+  grafana:
+    image: grafana/grafana-oss:${GRAFANA_VERSION}
+    container_name: grafana
+    restart: unless-stopped
+    profiles: ["metrics"]
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ}
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      # If you later put Grafana behind a reverse proxy, set this correctly:
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL}
+    secrets:
+      - grafana_admin_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    networks:
+      - observability
+
+networks:
+  observability:
+    name: ${OBS_NETWORK_NAME}
+    driver: bridge
+
+volumes:
+  jaeger_badger:
+    name: jaeger_badger
+  prometheus_data:
+    name: prometheus_data
+  prometheus_data:
+    name: prometheus_data
+  grafana_data:
+    name: grafana_data
+
+secrets:
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password.txt

@@ -1,0 +1,8 @@
+{
+  "service_strategies": [
+    { "service": "frontend", "type": "probabilistic", "param": 0.2 },
+    { "service": "api",      "type": "probabilistic", "param": 0.1 },
+    { "service": "worker",   "type": "probabilistic", "param": 0.05 }
+  ],
+  "default_strategy": { "type": "probabilistic", "param": 0.05 }
+}
