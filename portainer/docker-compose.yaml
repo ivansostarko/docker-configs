@@ -1,0 +1,95 @@
+name: asterix
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  portainer:
+    image: portainer/portainer-ce:lts
+    container_name: portainer
+    hostname: ${PORTAINER_HOSTNAME:-portainer}
+    restart: unless-stopped
+    pull_policy: always
+
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ:-Europe/Zagreb}
+
+    # Security note (blunt): mounting docker.sock effectively grants root-equivalent control of the host to Portainer.
+    # If Portainer is exposed to the internet and compromised, your host is compromised. Treat it accordingly.
+    volumes:
+      - portainer_data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    # Recommended exposure:
+    # - 9443: HTTPS UI (default)
+    # - 8000: OPTIONAL (Edge Agents tunnel). Remove if you don't use Edge Agents.
+    # - 9000: OPTIONAL legacy HTTP. Avoid unless you have a specific reason.
+    ports:
+      - "${PORTAINER_BIND_ADDR:-0.0.0.0}:${PORTAINER_HTTPS_PORT:-9443}:9443"
+      - "${PORTAINER_BIND_ADDR:-0.0.0.0}:${PORTAINER_TUNNEL_PORT:-8000}:8000"
+      - "${PORTAINER_BIND_ADDR:-0.0.0.0}:${PORTAINER_HTTP_PORT:-9000}:9000"
+
+    # Seed initial admin password (FIRST BOOT ONLY).
+    # After Portainer has created the admin user, this flag is ignored on subsequent restarts. :contentReference[oaicite:1]{index=1}
+    secrets:
+      - portainer_admin_password
+    command:
+      - "--admin-password-file=/run/secrets/portainer_admin_password"
+
+    networks:
+      - asterix_network
+
+    logging: *default-logging
+
+    security_opt:
+      - no-new-privileges:true
+
+    # Optional hardening (use if you understand the tradeoffs):
+    # init: true
+
+    # Optional healthcheck (may or may not work depending on tools present in the image).
+    # If it fails, remove it; a broken healthcheck is worse than none.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://127.0.0.1:9443/api/system/status >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  # OPTIONAL: host a templates JSON over HTTP inside the same Docker network.
+  # Portainer's --templates flag expects a URL, not a local file path. :contentReference[oaicite:2]{index=2}
+  portainer-templates:
+    image: nginx:alpine
+    container_name: portainer-templates
+    restart: unless-stopped
+    profiles: ["templates"]
+    volumes:
+      - ./templates:/usr/share/nginx/html:ro
+    networks:
+      - asterix_network
+    logging: *default-logging
+
+secrets:
+  portainer_admin_password:
+    file: ./secrets/portainer_admin_password.txt
+
+volumes:
+  portainer_data:
+    name: ${PORTAINER_DATA_VOLUME:-portainer_data}
+    driver: local
+
+networks:
+  asterix_network:
+    name: ${ASTERIX_NETWORK_NAME:-asterix_network}
+    driver: bridge
+    attachable: true
+    # If you already created this network externally (or want Docker to manage subnets), remove ipam entirely.
+    ipam:
+      config:
+        - subnet: ${ASTERIX_SUBNET:-172.30.0.0/16}
+          gateway: ${ASTERIX_GATEWAY:-172.30.0.1}

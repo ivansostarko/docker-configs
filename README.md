@@ -5,7 +5,6 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 ## What this repo is:
 
 - [php Apache](/php-apache/README.md)
-- Postgress
 - Portainer
 
 
