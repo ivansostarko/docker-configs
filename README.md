@@ -113,9 +113,9 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [Bacula Backup](/bacula-backup/README.md)
 
 ### Metrics / Prometheus Exporters
-| Service       | Exporter       | Grafana Dashboard | Alert Manager | Prometheus Job |
+| Service       | Exporter       | Grafana Dashboard | Alert Manager | Prometheus Job | fdf |
 | ------------- |:-------------:|:-------------:|:-------------:|:-------------:|:-------------:|
-| Coturn     | [Coturn Exporter](/prometheus-exporters/coturn-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| Coturn        | [Coturn Exporter](/prometheus-exporters/coturn-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
 | left bar      | [MySql Exporter](/prometheus-exporters/mysqld-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
 | left baz      | [Node Exporter](/prometheus-exporters/node-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
 | left bar      | [Ollama Exporter](/prometheus-exporters/ollama-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
