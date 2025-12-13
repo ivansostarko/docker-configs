@@ -113,13 +113,28 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [Bacula Backup](/bacula-backup/README.md)
 
 ### Metrics / Prometheus Exporters
-- [Coturn Exporter](/prometheus-exporters/coturn-exporter/README.md)
-- [MySql Exporter](/prometheus-exporters/mysqld-exporter/README.md)
-- [Node Exporter](/prometheus-exporters/node-exporter/README.md)
-- [Ollama Exporter](/prometheus-exporters/ollama-exporter/README.md)
-- [Postgres Exporter](/prometheus-exporters/postgres-exporter/README.md)
-- [Wireguard Exporter](/prometheus-exporters/wireguard-exporter/README.md)
-- [Cloudflare Exporter](/prometheus-exporters/wireguard-exporter/README.md)
+| Service       | Exporter       | Grafana Dashboard | Alert Manager | Prometheus Job |
+| ------------- |:-------------:|:-------------:|:-------------:|:-------------:|:-------------:|
+| Coturn     | [Coturn Exporter](/prometheus-exporters/coturn-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| left bar      | [MySql Exporter](/prometheus-exporters/mysqld-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| left baz      | [Node Exporter](/prometheus-exporters/node-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| left bar      | [Ollama Exporter](/prometheus-exporters/ollama-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| left baz      | [Postgres Exporter](/prometheus-exporters/postgres-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| left bar      | [Wireguard Exporter](/prometheus-exporters/wireguard-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| left baz      | [Cloudflare Exporter](/prometheus-exporters/wireguard-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| left bar      | right bar     | left foo      | right foo     | left foo      | right foo     |
+| left baz      | right baz     | left foo      | right foo     | left foo      | right foo     |
+| left bar      | right bar     | left foo      | right foo     | left foo      | right foo     |
+| left baz      | right baz     | left foo      | right foo     | left foo      | right foo     |
+| left bar      | right bar     | left foo      | right foo     | left foo      | right foo     |
+| left baz      | right baz     | left foo      | right foo     | left foo      | right foo     |
+| left bar      | right bar     | left foo      | right foo     | left foo      | right foo     |
+| left baz      | right baz     | left foo      | right foo     | left foo      | right foo     |
+| left bar      | right bar     | left foo      | right foo     | left foo      | right foo     |
+| left baz      | right baz     | left foo      | right foo     | left foo      | right foo     |
+
+
+
 - [Gluster Exporter](/prometheus-exporters/gluster-exporter/README.md)
 - [Elasticsearch Exporter](/prometheus-exporters/elasticsearch-exporter/README.md)
 - [Cloudflare Exporter](/prometheus-exporters/cloudflare-exporter/README.md)
