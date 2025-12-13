@@ -7,6 +7,9 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 
 ### Apps
 - [Wordpress](/wordpress/README.md)
+- [Laravel](/laravel/README.md)
+- [NextCloud](/nextcloud/README.md)
+- [Passbolt](/passbolt/README.md)
 
 ### Web servers
 - [Apache](/apache/README.md)
@@ -20,6 +23,7 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [MariaDB](/mariadb/README.md)
 - [MongoDB](/mongodb/README.md)
 - [Redis](/redis/README.md)
+- [MindDB](/minddb/README.md)
 
 ### Status Page
 - [CachetHq](/cachethq/README.md)
