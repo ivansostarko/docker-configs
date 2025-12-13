@@ -1,0 +1,57 @@
+\
+{
+	# Used for ACME registration and expiry notices
+	email {$ACME_EMAIL}
+
+	# Enable Prometheus metrics globally
+	metrics {
+		per_host
+	}
+
+	# Admin API remains default (localhost:2019 inside container).
+	# Do NOT publish 2019 to the host.
+
+	# Process-level/admin logs
+	log {
+		level INFO
+		output file /var/log/caddy/admin.log
+		format json
+	}
+}
+
+# Public site
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Security headers baseline (adjust for your app)
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer-when-downgrade"
+	}
+
+	# Access logs (JSON to file)
+	log {
+		output file /var/log/caddy/access.log
+		format json
+	}
+
+	# Static site example
+	root * /srv
+	file_server
+
+	# Reverse proxy example (uncomment and adapt)
+	# @api path /api/*
+	# reverse_proxy @api app:8080 {
+	#   health_uri /health
+	#   health_interval 10s
+	#   health_timeout 3s
+	# }
+}
+
+# Internal metrics endpoint on a dedicated listener.
+# Not published to host; only containers on the backend network can reach it.
+{$METRICS_LISTEN} {
+	metrics /metrics
+}

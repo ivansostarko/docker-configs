@@ -1,0 +1,7 @@
+# Secrets must never be committed
+secrets/*
+!secrets/README_DO_NOT_COMMIT.txt
+
+# Local overrides
+.env.local
+*.log

@@ -1,0 +1,25 @@
+# F-Droid repo configuration (binary repo)
+#
+# You must set repo_url to the exact public URL where clients can fetch the repo.
+# Recommended convention: https://<domain>/fdroid/repo/
+repo_url: "https://example.com/fdroid/repo"
+repo_name: "My Private F-Droid Repo"
+repo_description: "Internal distribution of APKs."
+repo_icon: "icon.png"
+
+# Where fdroidserver finds APKs and writes indexes (relative to /repo)
+repo_dir: "repo"
+
+# Metadata directory (relative to /repo); bind-mounted from ./config/metadata
+metadata_dir: "metadata"
+
+# Signing / keystore
+# These are paths inside the container; this compose mounts them as Docker secrets.
+keystore: "/run/secrets/fdroid_keystore"
+repo_keyalias: "myrepo"
+
+# IMPORTANT:
+# Some fdroidserver versions expect keystore passwords in config.yml (plaintext).
+# Do NOT commit plaintext passwords. If you hit that requirement:
+# - best: sign on a separate restricted builder, then publish the signed repo artifacts
+# - acceptable: generate a runtime-only config inside the container from secrets (see README)

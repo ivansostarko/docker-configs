@@ -1,0 +1,18 @@
+FileDaemon {
+  Name = "${BACULA_FD_NAME}"
+  FDPort = 9102
+  WorkingDirectory = "/opt/bacula/working"
+  PidDirectory = "/opt/bacula/working"
+  MaximumConcurrentJobs = 10
+}
+
+Director {
+  Name = "${BACULA_DIR_NAME}"
+  Password = "${BACULA_FD_PASSWORD}"
+}
+
+Messages {
+  Name = Standard
+  director = "${BACULA_DIR_NAME}" = all, !skipped, !restored
+  append = "/opt/bacula/working/bacula-fd.log" = all
+}

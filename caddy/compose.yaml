@@ -1,0 +1,156 @@
+services:
+  caddy:
+    image: caddy:2.10.2-alpine
+    container_name: caddy
+    restart: unless-stopped
+
+    # Optional: improves HTTP/3 UDP buffer sizing; comes with some security tradeoff.
+    # See official image docs.
+    cap_add:
+      - NET_ADMIN
+
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"   # HTTP/3 (QUIC)
+
+    # Metrics endpoint is NOT published to the host; only reachable by containers on the internal network.
+    expose:
+      - "9100"
+
+    environment:
+      TZ: "${TZ:-Europe/Zagreb}"
+      ACME_EMAIL: "${ACME_EMAIL}"
+      DOMAIN: "${DOMAIN}"
+      METRICS_LISTEN: "${METRICS_LISTEN:-:9100}"
+
+      # If you build the optional DNS image (profile "dns"), you can pass DNS tokens via env
+      # or use the secrets pattern described in README.
+      CLOUDFLARE_API_TOKEN: "${CLOUDFLARE_API_TOKEN:-}"
+
+    volumes:
+      # Mount the directory, not a single file (reload-safe).
+      - ./conf:/etc/caddy:ro
+      - ./site:/srv:ro
+
+      # Persist TLS material and state. /data must be persisted.
+      - caddy_data:/data
+      - caddy_config:/config
+
+      # Where we write access/admin logs (file output in Caddyfile)
+      - caddy_logs:/var/log/caddy
+
+    networks:
+      - edge
+      - backend
+
+    security_opt:
+      - no-new-privileges:true
+
+    tmpfs:
+      - /tmp
+
+    healthcheck:
+      # Uses the dedicated internal metrics listener (not the admin API).
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9100/metrics >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # Optional observability (Prometheus + Grafana)
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: prometheus
+    restart: unless-stopped
+    profiles: ["metrics"]
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - backend
+    depends_on:
+      - caddy
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    container_name: grafana
+    restart: unless-stopped
+    profiles: ["metrics"]
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-change-me}"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    networks:
+      - backend
+    depends_on:
+      - prometheus
+
+  # Optional: custom Caddy build with Cloudflare DNS module (profile "dns")
+  # This is how you get wildcard certs via DNS-01.
+  caddy_dns:
+    build:
+      context: .
+      dockerfile: Dockerfile.dns
+    container_name: caddy-dns
+    restart: unless-stopped
+    profiles: ["dns"]
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
+    expose:
+      - "9100"
+    environment:
+      TZ: "${TZ:-Europe/Zagreb}"
+      ACME_EMAIL: "${ACME_EMAIL}"
+      DOMAIN: "${DOMAIN}"
+      METRICS_LISTEN: "${METRICS_LISTEN:-:9100}"
+      CLOUDFLARE_API_TOKEN: "${CLOUDFLARE_API_TOKEN}"
+    volumes:
+      - ./conf:/etc/caddy:ro
+      - ./site:/srv:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - caddy_logs:/var/log/caddy
+    networks:
+      - edge
+      - backend
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9100/metrics >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+networks:
+  edge:
+    driver: bridge
+  backend:
+    driver: bridge
+    internal: true
+
+volumes:
+  caddy_data:
+  caddy_config:
+  caddy_logs:
+  prometheus_data:
+  grafana_data:

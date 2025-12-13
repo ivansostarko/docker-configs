@@ -1,0 +1,16 @@
+[http]
+ip: 0.0.0.0
+port: 33407
+endpoint: /metrics
+
+[db]
+name: ${DB_NAME}
+username: ${DB_USER}
+password: ${DB_PASSWORD}
+host: ${DB_HOST}
+port: ${DB_PORT}
+sslmode: disable
+
+[log]
+output: console
+level: info

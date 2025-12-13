@@ -1,0 +1,10 @@
+Director {
+  Name = "${BACULA_DIR_NAME}"
+  DIRport = 9101
+  address = bacula-dir
+  Password = "${BACULA_BCONSOLE_PASSWORD}"
+}
+Console {
+  Name = admin
+  Password = "${BACULA_BCONSOLE_PASSWORD}"
+}

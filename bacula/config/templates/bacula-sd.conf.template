@@ -1,0 +1,36 @@
+Storage {
+  Name = "${BACULA_SD_NAME}"
+  SDPort = 9103
+  WorkingDirectory = "/opt/bacula/working"
+  PidDirectory = "/opt/bacula/working"
+  MaximumConcurrentJobs = 10
+}
+
+Director {
+  Name = "${BACULA_DIR_NAME}"
+  Password = "${BACULA_SD_PASSWORD}"
+}
+
+Messages {
+  Name = Standard
+  director = "${BACULA_DIR_NAME}" = all
+  append = "/opt/bacula/working/bacula-sd.log" = all
+}
+
+Device {
+  Name = FileStorage
+  MediaType = File
+  ArchiveDevice = "${STORAGE_ARCHIVE_DIR}"
+  LabelMedia = yes
+  RandomAccess = Yes
+  AutomaticMount = yes
+  RemovableMedia = no
+  AlwaysOpen = no
+}
+
+Autochanger {
+  Name = FileChanger
+  Device = FileStorage
+  Changer Command = ""
+  Changer Device = ""
+}

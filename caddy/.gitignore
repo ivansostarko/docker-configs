@@ -1,0 +1,6 @@
+# Local secrets / tokens
+secrets/
+*.env.local
+
+# Data directories if you ever switch to bind mounts
+data/

@@ -1,0 +1,113 @@
+Director {
+  Name = "${BACULA_DIR_NAME}"
+  DIRport = 9101
+  QueryFile = "/opt/bacula/scripts/query.sql"
+  WorkingDirectory = "/opt/bacula/working"
+  PidDirectory = "/opt/bacula/working"
+  MaximumConcurrentJobs = 10
+  Password = "${BACULA_BCONSOLE_PASSWORD}"
+  Messages = Daemon
+}
+
+Catalog {
+  Name = MyCatalog
+  dbname = "${DB_NAME}"
+  dbuser = "${DB_USER}"
+  dbpassword = "${DB_PASSWORD}"
+  dbaddress = "${DB_HOST}"
+  dbport = ${DB_PORT}
+}
+
+Messages {
+  Name = Daemon
+  console = all, !skipped, !saved
+  append = "/opt/bacula/working/bacula-dir.log" = all, !skipped, !saved
+}
+
+Storage {
+  Name = "${BACULA_SD_NAME}"
+  Address = bacula-sd
+  SDPort = 9103
+  Password = "${BACULA_SD_PASSWORD}"
+  Device = FileStorage
+  MediaType = File
+}
+
+Client {
+  Name = "${BACULA_FD_NAME}"
+  Address = bacula-fd
+  FDPort = 9102
+  Catalog = MyCatalog
+  Password = "${BACULA_FD_PASSWORD}"
+  FileRetention = 30 days
+  JobRetention = 90 days
+  AutoPrune = yes
+}
+
+FileSet {
+  Name = "FilesToBackup"
+  Include {
+    File = /data
+    Options {
+      signature = SHA1
+      compression = GZIP
+    }
+  }
+}
+
+Schedule {
+  Name = "WeeklyCycle"
+  Run = Full 1st sun at 03:00
+  Run = Differential 2nd-5th sun at 03:00
+  Run = Incremental mon-sat at 03:00
+}
+
+Pool {
+  Name = Default
+  PoolType = Backup
+  Recycle = yes
+  AutoPrune = yes
+  VolumeRetention = 60 days
+  MaximumVolumeBytes = ${STORAGE_MAX_BYTES}
+  MaximumVolumes = 100
+  LabelFormat = "Vol-"
+}
+
+JobDefs {
+  Name = "DefaultJob"
+  Type = Backup
+  Level = Incremental
+  Client = "${BACULA_FD_NAME}"
+  FileSet = "FilesToBackup"
+  Schedule = "WeeklyCycle"
+  Storage = "${BACULA_SD_NAME}"
+  Messages = Standard
+  Pool = Default
+  WriteBootstrap = "/opt/bacula/working/%c.bsr"
+  Priority = 10
+}
+
+Job {
+  Name = "BackupLocalData"
+  JobDefs = "DefaultJob"
+  Level = Incremental
+}
+
+Console {
+  Name = "admin"
+  Password = "${BACULA_BCONSOLE_PASSWORD}"
+  CommandACL = *all*
+  JobACL = *all*
+  ClientACL = *all*
+  StorageACL = *all*
+  ScheduleACL = *all*
+  PoolACL = *all*
+  FileSetACL = *all*
+  CatalogACL = *all*
+}
+
+Messages {
+  Name = Standard
+  console = all, !skipped, !saved
+  append = "/opt/bacula/working/bacula.log" = all, !skipped, !saved
+}

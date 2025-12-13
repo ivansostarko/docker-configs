@@ -1,0 +1,30 @@
+version: 0.1
+
+log:
+  level: info
+  fields:
+    service: registry
+
+storage:
+  filesystem:
+    rootdirectory: /var/lib/registry
+  cache:
+    blobdescriptor: inmemory
+
+delete:
+  enabled: true
+
+http:
+  addr: :5000
+  headers:
+    X-Content-Type-Options: [nosniff]
+    X-Frame-Options: [DENY]
+    Referrer-Policy: ["no-referrer"]
+
+auth:
+  htpasswd:
+    realm: basic-realm
+    path: /run/secrets/registry_htpasswd
+
+debug:
+  addr: 0.0.0.0:5001

@@ -1,0 +1,23 @@
+# Example host-side alternative to the 'scheduler' container (safer than mounting docker.sock).
+# Save as /etc/systemd/system/fdroid-repo-update.service and .timer (adjust paths).
+
+# ---- fdroid-repo-update.service ----
+[Unit]
+Description=Run fdroid update (Docker Compose)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/fdroid-repo-compose
+ExecStart=/usr/bin/docker compose run --rm fdroid
+
+# ---- fdroid-repo-update.timer ----
+[Unit]
+Description=Schedule fdroid update
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

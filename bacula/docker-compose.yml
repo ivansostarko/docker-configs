@@ -1,0 +1,295 @@
+name: bacula
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+networks:
+  bacula_internal:
+    internal: true
+  bacula_public:
+    internal: false
+
+volumes:
+  pgdata:
+  bacula_config:
+  bacula_working:
+  bacula_storage:
+  bacula_web_protected:
+  prometheus_data:
+  grafana_data:
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+  bacula_sd_password:
+    file: ./secrets/bacula_sd_password.txt
+  bacula_fd_password:
+    file: ./secrets/bacula_fd_password.txt
+  bacula_bconsole_password:
+    file: ./secrets/bacula_bconsole_password.txt
+
+services:
+  # Renders config templates once, injecting secrets into real Bacula configs.
+  config-render:
+    image: alpine:3.20
+    container_name: bacula-config-render
+    networks: [bacula_internal]
+    volumes:
+      - ./config/templates:/templates:ro
+      - bacula_config:/out
+    secrets:
+      - db_password
+      - bacula_sd_password
+      - bacula_fd_password
+      - bacula_bconsole_password
+    environment:
+      BACULA_DIR_NAME: ${BACULA_DIR_NAME}
+      BACULA_SD_NAME: ${BACULA_SD_NAME}
+      BACULA_FD_NAME: ${BACULA_FD_NAME}
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      STORAGE_ARCHIVE_DIR: ${STORAGE_ARCHIVE_DIR}
+      STORAGE_MAX_BYTES: ${STORAGE_MAX_BYTES}
+      TZ: ${TZ}
+    command: >
+      sh -euc '
+        if [ -f /out/bacula-dir.conf ] && [ -f /out/bacula-sd.conf ] && [ -f /out/bacula-fd.conf ] && [ -f /out/bconsole.conf ]; then
+          echo "Rendered configs already exist in volume; skipping.";
+          exit 0;
+        fi
+
+        apk add --no-cache gettext >/dev/null
+
+        export DB_PASSWORD="$(cat /run/secrets/db_password)"
+        export BACULA_SD_PASSWORD="$(cat /run/secrets/bacula_sd_password)"
+        export BACULA_FD_PASSWORD="$(cat /run/secrets/bacula_fd_password)"
+        export BACULA_BCONSOLE_PASSWORD="$(cat /run/secrets/bacula_bconsole_password)"
+
+        for f in /templates/*.template; do
+          out="/out/$(basename "$f" .template)"
+          echo "Rendering $f -> $out"
+          envsubst < "$f" > "$out"
+        done
+
+        chmod 600 /out/*.conf || true
+        echo "Done."
+      '
+    restart: "no"
+    logging: *default-logging
+
+  db:
+    image: gpmidi/bacula-catalog:13.0.3
+    container_name: bacula-db
+    networks: [bacula_internal]
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD_FALLBACK}  # fallback if you don't want secrets
+      TZ: ${TZ}
+    volumes:
+      - pgdata:/var/lib/postgresql/data:rw
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h 127.0.0.1 -p 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    logging: *default-logging
+
+  bacula-dir:
+    image: gpmidi/bacula-director:13.0.3
+    container_name: bacula-dir
+    networks: [bacula_internal]
+    depends_on:
+      config-render:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+    volumes:
+      - bacula_config:/opt/bacula/etc:ro
+      - bacula_working:/opt/bacula/working:rw
+    # Do NOT publish 9101 to the internet; keep it internal.
+    expose:
+      - "9101"
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 bash -lc ':> /dev/tcp/127.0.0.1/9101'"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    logging: *default-logging
+
+  bacula-sd:
+    image: gpmidi/bacula-storage:13.0.3
+    container_name: bacula-sd
+    networks: [bacula_internal]
+    depends_on:
+      config-render:
+        condition: service_completed_successfully
+      bacula-dir:
+        condition: service_healthy
+    volumes:
+      - bacula_config:/opt/bacula/etc:ro
+      - bacula_storage:${STORAGE_ARCHIVE_DIR}:rw
+    expose:
+      - "9103"
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 bash -lc ':> /dev/tcp/127.0.0.1/9103'"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    logging: *default-logging
+
+  bacula-fd:
+    image: gpmidi/bacula-client:13.0.3
+    container_name: bacula-fd
+    networks: [bacula_internal]
+    depends_on:
+      config-render:
+        condition: service_completed_successfully
+      bacula-dir:
+        condition: service_healthy
+    volumes:
+      - bacula_config:/opt/bacula/etc:ro
+      # What you actually back up from the host:
+      - ${BACKUP_SOURCE_PATH}:/data:ro
+    expose:
+      - "9102"
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 bash -lc ':> /dev/tcp/127.0.0.1/9102'"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    logging: *default-logging
+
+  # Optional: Bacula console container for interactive admin (profile: tools)
+  bconsole:
+    image: gpmidi/bacula-director:13.0.3
+    container_name: bacula-bconsole
+    profiles: ["tools"]
+    networks: [bacula_internal]
+    depends_on:
+      config-render:
+        condition: service_completed_successfully
+      bacula-dir:
+        condition: service_healthy
+    entrypoint: ["bash", "-lc", "bconsole -c /opt/bacula/etc/bconsole.conf"]
+    stdin_open: true
+    tty: true
+    volumes:
+      - bacula_config:/opt/bacula/etc:ro
+    restart: "no"
+    logging: *default-logging
+
+  # Optional UI: Bacula-Web (read-only reporting).
+  bacula-web:
+    image: baculaweb/bacula-web:latest
+    container_name: bacula-web
+    profiles: ["ui"]
+    networks:
+      - bacula_internal
+      - bacula_public
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${BACULA_WEB_PORT}:80"
+    volumes:
+      - ./bacula-web/config.php:/var/www/html/application/config/config.php:ro
+      - bacula_web_protected:/var/www/html/application/assets/protected:rw
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    logging: *default-logging
+
+  # Metrics: bacula_exporter (Prometheus exporter reads Bacula catalog in PostgreSQL).
+  bacula-exporter:
+    image: funbox/bacula_exporter:1.1.0
+    container_name: bacula-exporter
+    profiles: ["monitoring"]
+    networks: [bacula_internal]
+    depends_on:
+      db:
+        condition: service_healthy
+    secrets:
+      - db_password
+    volumes:
+      - ./monitoring/bacula_exporter.knf.template:/etc/bacula_exporter.knf.template:ro
+    environment:
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      TZ: ${TZ}
+    command: >
+      sh -euc '
+        export DB_PASSWORD="$(cat /run/secrets/db_password)";
+        apk add --no-cache gettext >/dev/null 2>&1 || true;
+        envsubst < /etc/bacula_exporter.knf.template > /tmp/bacula_exporter.knf;
+        exec /usr/local/bin/bacula_exporter -c /tmp/bacula_exporter.knf
+      '
+    ports:
+      - "${BACULA_EXPORTER_PORT}:33407"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:33407/metrics >/dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    logging: *default-logging
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: bacula-prometheus
+    profiles: ["monitoring"]
+    networks: [bacula_internal]
+    depends_on:
+      bacula-exporter:
+        condition: service_healthy
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus:rw
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/ready >/dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    logging: *default-logging
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: bacula-grafana
+    profiles: ["monitoring"]
+    networks: [bacula_internal]
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      TZ: ${TZ}
+    volumes:
+      - grafana_data:/var/lib/grafana:rw
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    logging: *default-logging
