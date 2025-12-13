@@ -1,0 +1,178 @@
+services:
+  typesense:
+    image: "typesense/typesense:${TYPESENSE_VERSION}"
+    container_name: "${COMPOSE_PROJECT_NAME:-typesense}-typesense"
+    restart: unless-stopped
+
+    # Security posture:
+    # - Prefer NOT publishing 8108 publicly.
+    # - Put behind your reverse proxy on an internal network.
+    #
+    # If you must publish, bind to localhost at minimum:
+    ports:
+      - "${TYPESENSE_BIND_ADDR:-127.0.0.1}:${TYPESENSE_PORT:-8108}:8108"
+
+    environment:
+      TZ: "${TZ:-Europe/Zagreb}"
+
+      # Typesense supports env vars that map to CLI flags:
+      # TYPESENSE_DATA_DIR -> --data-dir, etc.
+      TYPESENSE_DATA_DIR: "/data"
+      TYPESENSE_API_PORT: "8108"
+      TYPESENSE_API_ADDRESS: "0.0.0.0"
+
+      TYPESENSE_ENABLE_CORS: "${TYPESENSE_ENABLE_CORS:-false}"
+      TYPESENSE_CORS_DOMAINS: "${TYPESENSE_CORS_DOMAINS:-}"
+
+      # Logging to files is optional; default logs to stdout/stderr.
+      TYPESENSE_LOG_DIR: "/var/log/typesense"
+      TYPESENSE_ENABLE_ACCESS_LOGGING: "${TYPESENSE_ENABLE_ACCESS_LOGGING:-false}"
+      TYPESENSE_ENABLE_SEARCH_LOGGING: "${TYPESENSE_ENABLE_SEARCH_LOGGING:-false}"
+      TYPESENSE_LOG_SLOW_REQUESTS_TIME_MS: "${TYPESENSE_LOG_SLOW_REQUESTS_TIME_MS:--1}"
+
+      # Search analytics (optional)
+      TYPESENSE_ENABLE_SEARCH_ANALYTICS: "${TYPESENSE_ENABLE_SEARCH_ANALYTICS:-false}"
+      TYPESENSE_ANALYTICS_DIR: "/data/analytics"
+      TYPESENSE_ANALYTICS_FLUSH_INTERVAL: "${TYPESENSE_ANALYTICS_FLUSH_INTERVAL:-3600}"
+
+    secrets:
+      - typesense_api_key
+
+    volumes:
+      - typesense_data:/data
+      - typesense_logs:/var/log/typesense
+      - ./config/typesense/typesense-server.ini:/etc/typesense/typesense-server.ini:ro
+      - ./config/typesense/entrypoint.sh:/opt/entrypoint.sh:ro
+
+    # The official image uses /opt/typesense-server as ENTRYPOINT.
+    # We wrap it to read the admin API key from a Docker secret file.
+    entrypoint: ["/bin/sh", "/opt/entrypoint.sh"]
+
+    command: ["--config=/etc/typesense/typesense-server.ini"]
+
+    # Health endpoint: GET /health returns {"ok":true}
+    # Note: /health may be "ok" before full warmup in some cases (known behavior).
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8108/health | grep -q '\"ok\"\\s*:\\s*true'"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+
+    networks:
+      - internal
+
+  # Optional: Prometheus exporter that converts Typesense /metrics.json + /stats.json into Prometheus format.
+  # This exporter expects an API key and Typesense host/port.
+  typesense_exporter:
+    image: "akyriako78/typesense-prometheus-exporter:${TYPESENSE_EXPORTER_VERSION:-0.1.9}"
+    container_name: "${COMPOSE_PROJECT_NAME:-typesense}-typesense-exporter"
+    restart: unless-stopped
+    profiles: ["monitoring"]
+
+    environment:
+      LOG_LEVEL: "${TYPESENSE_EXPORTER_LOG_LEVEL:-0}"
+      TYPESENSE_PROTOCOL: "http"
+      TYPESENSE_HOST: "typesense"
+      TYPESENSE_PORT: "8108"
+      TYPESENSE_CLUSTER: "${TYPESENSE_CLUSTER_NAME:-typesense}"
+      METRICS_PORT: "8908"
+
+      # This exporter uses TYPESENSE_API_KEY directly; we keep it in env by reading the same secret value.
+      # If you want to avoid env exposure, fork/patch the exporter to support *_FILE.
+      TYPESENSE_API_KEY: "${TYPESENSE_API_KEY}"
+
+    depends_on:
+      typesense:
+        condition: service_healthy
+
+    ports:
+      - "${TYPESENSE_EXPORTER_BIND_ADDR:-127.0.0.1}:${TYPESENSE_EXPORTER_PORT:-8908}:8908"
+
+    networks:
+      - internal
+
+  prometheus:
+    image: "prom/prometheus:${PROMETHEUS_VERSION:-v2.54.1}"
+    container_name: "${COMPOSE_PROJECT_NAME:-typesense}-prometheus"
+    restart: unless-stopped
+    profiles: ["monitoring"]
+
+    volumes:
+      - prometheus_data:/prometheus
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+
+    ports:
+      - "${PROMETHEUS_BIND_ADDR:-127.0.0.1}:${PROMETHEUS_PORT:-9090}:9090"
+
+    depends_on:
+      - typesense_exporter
+
+    networks:
+      - internal
+
+  grafana:
+    image: "grafana/grafana:${GRAFANA_VERSION:-11.1.5}"
+    container_name: "${COMPOSE_PROJECT_NAME:-typesense}-grafana"
+    restart: unless-stopped
+    profiles: ["monitoring"]
+
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-change-me}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+
+    ports:
+      - "${GRAFANA_BIND_ADDR:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
+
+    depends_on:
+      - prometheus
+
+    networks:
+      - internal
+
+  # Optional: lightweight Typesense Admin Dashboard (requires CORS enabled on Typesense).
+  # It’s convenient, but treat it as admin surface area.
+  typesense_admin_dashboard:
+    image: "ghcr.io/lewynation/typesense-admin-dashboard:latest"
+    container_name: "${COMPOSE_PROJECT_NAME:-typesense}-admin-dashboard"
+    restart: unless-stopped
+    profiles: ["ui"]
+
+    ports:
+      - "${TYPESENSE_DASHBOARD_BIND_ADDR:-127.0.0.1}:${TYPESENSE_DASHBOARD_PORT:-3005}:3000"
+
+    depends_on:
+      typesense:
+        condition: service_healthy
+
+    networks:
+      - internal
+
+networks:
+  internal:
+    name: "${COMPOSE_PROJECT_NAME:-typesense}_internal"
+    driver: bridge
+
+volumes:
+  typesense_data:
+  typesense_logs:
+  prometheus_data:
+  grafana_data:
+
+secrets:
+  typesense_api_key:
+    file: ./secrets/typesense_api_key.txt

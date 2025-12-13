@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: typesense_exporter
+    static_configs:
+      - targets: ["typesense_exporter:8908"]

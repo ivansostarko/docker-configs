@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: "Typesense"
+    orgId: 1
+    folder: "Typesense"
+    type: file
+    disableDeletion: true
+    editable: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
