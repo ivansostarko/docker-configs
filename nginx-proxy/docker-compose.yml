@@ -1,0 +1,213 @@
+version: "3.9"
+
+name: nginx-proxy-stack
+
+services:
+  # ------------------------------------------------------------
+  # Safer Docker API exposure (instead of mounting docker.sock into nginx)
+  # ------------------------------------------------------------
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: docker-socket-proxy
+    restart: unless-stopped
+    environment:
+      # Allow only what nginx-proxy + acme-companion typically need
+      - CONTAINERS=1
+      - EVENTS=1
+      - INFO=1
+      - PING=1
+      # Everything else defaults to 0 (blocked)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - proxy-internal
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 2375 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run
+    logging:
+      driver: json-file
+      options:
+        max-size: "${LOG_MAX_SIZE:-10m}"
+        max-file: "${LOG_MAX_FILE:-3}"
+
+  # ------------------------------------------------------------
+  # Nginx reverse proxy (auto config via docker-gen)
+  # ------------------------------------------------------------
+  nginx-proxy:
+    image: nginxproxy/nginx-proxy:alpine
+    container_name: nginx-proxy
+    restart: unless-stopped
+    depends_on:
+      docker-socket-proxy:
+        condition: service_healthy
+    environment:
+      - TZ=${TZ:-Europe/Zagreb}
+
+      # nginx-proxy reads docker events; point it at socket-proxy
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
+
+      # Optional defaults
+      - DEFAULT_HOST=${DEFAULT_HOST:-}
+      - ENABLE_IPV6=${ENABLE_IPV6:-false}
+    ports:
+      - "80:80"
+      - "443:443"
+      # Optional: expose metrics to host (only if Prometheus is outside Docker)
+      # - "9113:9113"
+    networks:
+      - proxy
+      - proxy-internal
+    volumes:
+      # Persisted proxy assets
+      - proxy_certs:/etc/nginx/certs:rw
+      - proxy_vhost:/etc/nginx/vhost.d:rw
+      - proxy_html:/usr/share/nginx/html:rw
+
+      # Custom endpoints (health + stub_status)
+      - ./proxy/nginx/conf.d:/etc/nginx/conf.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      # Nginx needs to bind to 80/443
+      - NET_BIND_SERVICE
+    logging:
+      driver: json-file
+      options:
+        max-size: "${LOG_MAX_SIZE:-10m}"
+        max-file: "${LOG_MAX_FILE:-3}"
+
+  # ------------------------------------------------------------
+  # Automatic Let's Encrypt certificates for nginx-proxy
+  # ------------------------------------------------------------
+  acme-companion:
+    image: nginxproxy/acme-companion:latest
+    container_name: acme-companion
+    restart: unless-stopped
+    depends_on:
+      nginx-proxy:
+        condition: service_healthy
+    environment:
+      - TZ=${TZ:-Europe/Zagreb}
+
+      # Point to socket-proxy (not raw docker.sock)
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
+
+      # Required: certificate registration email
+      - DEFAULT_EMAIL=${LETSENCRYPT_EMAIL:?set LETSENCRYPT_EMAIL in .env}
+
+      # Optional operational controls
+      - ACME_CA_URI=${ACME_CA_URI:-}     # e.g. staging endpoint for testing
+      - ACME_CHALLENGE=${ACME_CHALLENGE:-http-01}
+      - DEBUG=${ACME_DEBUG:-false}
+    volumes:
+      - proxy_certs:/etc/nginx/certs:rw
+      - proxy_vhost:/etc/nginx/vhost.d:rw
+      - proxy_html:/usr/share/nginx/html:rw
+      - proxy_acme:/etc/acme.sh:rw
+    networks:
+      - proxy
+      - proxy-internal
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "${LOG_MAX_SIZE:-10m}"
+        max-file: "${LOG_MAX_FILE:-3}"
+
+  # ------------------------------------------------------------
+  # Prometheus metrics for Nginx (scrapes stub_status)
+  # Uses same network namespace as nginx-proxy for localhost access.
+  # ------------------------------------------------------------
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:latest
+    container_name: nginx-exporter
+    restart: unless-stopped
+    depends_on:
+      nginx-proxy:
+        condition: service_healthy
+    command:
+      - "--nginx.scrape-uri=http://127.0.0.1:8080/stub_status"
+    network_mode: "service:nginx-proxy"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9113/metrics >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    logging:
+      driver: json-file
+      options:
+        max-size: "${LOG_MAX_SIZE:-10m}"
+        max-file: "${LOG_MAX_FILE:-3}"
+
+  # ------------------------------------------------------------
+  # Optional: demo backend to validate routing
+  # Visit: http(s)://whoami.<your-domain>/
+  # ------------------------------------------------------------
+  whoami:
+    image: traefik/whoami:latest
+    container_name: whoami
+    restart: unless-stopped
+    networks:
+      - proxy
+    environment:
+      - VIRTUAL_HOST=whoami.${BASE_DOMAIN:?set BASE_DOMAIN in .env}
+      - LETSENCRYPT_HOST=whoami.${BASE_DOMAIN}
+      - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
+      - VIRTUAL_PORT=80
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80 >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "${LOG_MAX_SIZE:-10m}"
+        max-file: "${LOG_MAX_FILE:-3}"
+
+networks:
+  proxy:
+    name: proxy
+    driver: bridge
+
+  # Internal-only network for docker API access, not reachable from outside
+  proxy-internal:
+    name: proxy-internal
+    driver: bridge
+    internal: true
+
+volumes:
+  proxy_certs:
+    name: proxy_certs
+  proxy_vhost:
+    name: proxy_vhost
+  proxy_html:
+    name: proxy_html
+  proxy_acme:
+    name: proxy_acme
+
+secrets:
+  # Used by /stub_status basic auth (see 00-status.conf)
+  status_htpasswd:
+    file: ./secrets/status_htpasswd

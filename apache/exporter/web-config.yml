@@ -1,0 +1,7 @@
+# exporter-toolkit web config
+# This enables basic auth on the /metrics endpoint.
+# Username: prometheus
+# Password: stored in ./secrets/exporter_basic_auth_password.txt (use Prometheus password_file to read it)
+
+basic_auth_users:
+  prometheus: ${EXPORTER_BASIC_AUTH_PASSWORD}

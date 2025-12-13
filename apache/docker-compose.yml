@@ -1,0 +1,146 @@
+version: "3.9"
+
+name: apache-stack
+
+services:
+  # =========================
+  # Apache HTTPD
+  # =========================
+  apache:
+    image: httpd:2.4
+    container_name: apache
+    restart: unless-stopped
+
+    # Public HTTP only (status port is NOT published)
+    ports:
+      - "${APACHE_HTTP_PORT:-8080}:80"
+
+    environment:
+      TZ: ${TZ:-Europe/Zagreb}
+
+    volumes:
+      # Your site content
+      - type: bind
+        source: ./apache/www
+        target: /usr/local/apache2/htdocs
+        read_only: true
+
+      # Main config + vhosts
+      - type: bind
+        source: ./apache/conf/httpd.conf
+        target: /usr/local/apache2/conf/httpd.conf
+        read_only: true
+      - type: bind
+        source: ./apache/conf/vhosts.conf
+        target: /usr/local/apache2/conf/extra/vhosts.conf
+        read_only: true
+      - type: bind
+        source: ./apache/conf/status-vhost.conf
+        target: /usr/local/apache2/conf/extra/status-vhost.conf
+        read_only: true
+
+      # Optional: persist logs (useful for incident review)
+      - apache_logs:/usr/local/apache2/logs
+
+    networks:
+      - web
+      - monitoring
+
+    # Validates syntax and a simple public health endpoint
+    # NOTE: official httpd image includes 'wget' on most variants; if not, remove wget and rely on 'httpd -t'.
+    healthcheck:
+      test: ["CMD-SHELL", "httpd -t && wget -qO- http://127.0.0.1/healthz.html >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    stop_grace_period: 30s
+
+    # Security hardening defaults
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  # =========================
+  # Prometheus Apache Exporter
+  # =========================
+  apache_exporter:
+    # Pin in real environments; avoid ':latest' drift.
+    image: quay.io/lusitaniae/apache-exporter:v1.0.10
+    container_name: apache_exporter
+    restart: unless-stopped
+
+    command:
+      - "--scrape_uri=http://apache:${APACHE_STATUS_PORT_INTERNAL:-8081}/server-status?auto"
+      - "--web.listen-address=:9117"
+      # Optional: protect /metrics with exporter-toolkit web config (basic auth/TLS)
+      - "--web.config.file=/etc/apache_exporter/web-config.yml"
+
+    volumes:
+      - type: bind
+        source: ./exporter/web-config.yml
+        target: /etc/apache_exporter/web-config.yml
+        read_only: true
+
+    secrets:
+      - exporter_basic_auth_password
+
+    environment:
+      TZ: ${TZ:-Europe/Zagreb}
+      # Exporter-toolkit can substitute ${...} from env; compose won't auto-load secrets into env.
+      # We set this via an entrypoint wrapper in more advanced setups; for simplicity, keep password in the secret file
+      # and refer to it from Prometheus using password_file.
+
+    networks:
+      - monitoring
+
+    ports:
+      # If Prometheus scrapes via the Docker network, you can remove this publishing.
+      - "${APACHE_EXPORTER_PORT:-9117}:9117"
+
+    depends_on:
+      apache:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9117/metrics >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  apache_logs:
+
+networks:
+  web:
+    name: ${WEB_NETWORK_NAME:-web}
+    driver: bridge
+  monitoring:
+    name: ${MONITORING_NETWORK_NAME:-monitoring}
+    driver: bridge
+
+secrets:
+  exporter_basic_auth_password:
+    file: ./secrets/exporter_basic_auth_password.txt

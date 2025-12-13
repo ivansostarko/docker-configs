@@ -1,0 +1,111 @@
+version: "3.9"
+
+name: nginx_stack
+
+services:
+  nginx:
+    # Unprivileged NGINX image (default listen port is 8080)
+    image: ${NGINX_IMAGE:-nginxinc/nginx-unprivileged:alpine}
+    container_name: nginx
+    restart: unless-stopped
+
+    # Publish HTTP/HTTPS on the host, but keep internal listen as 8080/8443
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:8080"
+      - "${NGINX_HTTPS_PORT:-443}:8443"
+
+    environment:
+      - TZ=${TZ:-Europe/Zagreb}
+
+    networks:
+      frontend:
+        aliases:
+          - nginx
+      monitoring:
+        aliases:
+          - nginx-metrics
+
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - nginx_cache:/var/cache/nginx
+
+    secrets:
+      - basic_auth_htpasswd
+      - tls_crt
+      - tls_key
+
+    # Hardening
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  nginx_exporter:
+    image: ${NGINX_EXPORTER_IMAGE:-nginx/nginx-prometheus-exporter:1.5.1}
+    container_name: nginx_exporter
+    restart: unless-stopped
+
+    command:
+      - "--nginx.scrape-uri=http://nginx:8080/stub_status"
+      - "--web.listen-address=:9113"
+      - "--web.telemetry-path=/metrics"
+
+    networks:
+      - monitoring
+
+    ports:
+      - "${NGINX_EXPORTER_PORT:-9113}:9113"
+
+    depends_on:
+      nginx:
+        condition: service_healthy
+
+    # Note: some minimal images may not include wget/sh. If this fails, remove it and rely on Prometheus scraping.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9113/metrics >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+networks:
+  frontend:
+    name: ${FRONTEND_NETWORK_NAME:-frontend}
+    driver: bridge
+
+  monitoring:
+    name: ${MONITORING_NETWORK_NAME:-monitoring}
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: ${MONITORING_SUBNET:-172.30.10.0/24}
+
+volumes:
+  nginx_cache:
+    name: nginx_cache
+
+secrets:
+  basic_auth_htpasswd:
+    file: ./secrets/basic_auth.htpasswd
+  tls_crt:
+    file: ./secrets/tls.crt
+  tls_key:
+    file: ./secrets/tls.key
