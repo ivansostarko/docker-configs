@@ -4,17 +4,55 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 
 ## What this repo is:
 
-## Tables
 
-| Left columns  | Right columns |
-| ------------- |:-------------:|
-| [php Apache](/php-apache/README.md)      | right foo     |
-| left bar      | right bar     |
-| left baz      | right baz     |
+### Apps
+- [Wordpress](/wordpress/README.md)
+
+### Databases
+- [MySql](/mysql/README.md)
+- [Postgres](/postgres/README.md)
+- [MariaDB](/mariadb/README.md)
+- [MongoDB](/mongodb/README.md)
+- [Redis](/redis/README.md)
+
+### Monitoring
+- [Prometheus](/prometheus/README.md)
+- [Portainer](/portainer/README.md)
+- [PhpMyAdmin](/phpmyadmin/README.md)
+- [Adminer](/adminer/README.md)
+- [Mattermost](/mattermost/README.md)
+- [Grafana](/grafana/README.md)
+- [Glitchtip](/glitchtip/README.md)
+- [CachetHq](/cachethq/README.md)
+- [Alert Manager](/alert-manager/README.md)
 
 
+### Networks
+- [CoreDNS](/coredns/README.md)
 
+### Email
+- [Postal](/postal/README.md)
+- [Mailhog](/mailhog/README.md)
 
+### AI
+- [Ollama](/ollama/README.md)
+- [Open AI Web](/open-ai-web/README.md)
+- [N8N](/n8n/README.md)
+
+### Storage
+- [Minio](/minio/README.md)
+
+### Security
+- [Infisical](/infisical/README.md)
+
+### Metrics / Prometheus Exporters
+- [Coturn Exporter](/prometheus-exporters/coturn_exporter/README.md)
+- [MySql Exporter](/prometheus-exporters/mysqld_exporter/README.md)
+- [Node Exporter](/prometheus-exporters/node-exporter/README.md)
+- [Ollama Exporter](/prometheus-exporters/ollama-exporter/README.md)
+- [Postgres Exporter](/prometheus-exporters/postgres_exporter/README.md)
+- [Wireguard Exporter](/prometheus-exporters/wireguard-exporter/README.md)
+- [Cloudflare Exporter](/prometheus-exporters/wireguard-exporter/README.md)
 
 ## Prerequisites
 
