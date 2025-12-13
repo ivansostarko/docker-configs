@@ -157,7 +157,7 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 | ------------- |:-------------:|:-------------:|:-------------:|:-------------:|:-------------:|
 | Coturn        | [Coturn Exporter](/prometheus-exporters/coturn-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
 | MySql      | [MySql Exporter](/prometheus-exporters/mysqld-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
-| Node Exporter      | [Node Exporter](/prometheus-exporters/node-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
+| Node Exporter      | [Node Exporter](/prometheus-exporters/node-exporter/README.md)     | https://grafana.com/grafana/dashboards/1860-node-exporter-full/      | right foo     | left foo      | right foo     |
 | Ollama      | [Ollama Exporter](/prometheus-exporters/ollama-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
 | Postgres      | [Postgres Exporter](/prometheus-exporters/postgres-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
 | Wireguard      | [Wireguard Exporter](/prometheus-exporters/wireguard-exporter/README.md)     | left foo      | right foo     | left foo      | right foo     |
