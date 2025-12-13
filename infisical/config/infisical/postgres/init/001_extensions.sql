@@ -1,0 +1,3 @@
+-- Optional: add Postgres extensions or bootstrap SQL here.
+-- Example:
+-- CREATE EXTENSION IF NOT EXISTS "uuid-ossp";

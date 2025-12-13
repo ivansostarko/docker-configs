@@ -1,0 +1,86 @@
+services:
+  alertmanager:
+    image: prom/alertmanager:v0.29.0
+    hostname: alertmanager
+    # container_name: alertmanager  # avoid unless you accept "no scaling ever"
+
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ:-Europe/Zagreb}
+
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+      - "--data.retention=${ALERTMANAGER_DATA_RETENTION:-120h}"
+      - "--log.level=${ALERTMANAGER_LOG_LEVEL:-info}"
+      - "--web.listen-address=:9093"
+      - "--web.external-url=${ALERTMANAGER_EXTERNAL_URL:-http://alertmanager:9093}"
+      - "--web.route-prefix=${ALERTMANAGER_ROUTE_PREFIX:-/}"
+
+    # Safer default: localhost-only publish. Use a reverse proxy for remote access.
+    ports:
+      - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
+
+    networks:
+      - asterix_network
+
+    volumes:
+      - alertmanager_data:/alertmanager
+      - ./config/alertmanager/templates:/etc/alertmanager/templates:ro
+
+    configs:
+      - source: alertmanager_yml
+        target: /etc/alertmanager/alertmanager.yml
+        mode: 0444
+
+    secrets:
+      - source: alertmanager_smtp_password
+        target: alertmanager_smtp_password
+        mode: 0400
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9093/-/ready >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+    init: true
+
+    # Hardening knobs
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 200
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  asterix_network:
+    name: asterix_network
+    driver: bridge
+    # internal: true  # enable if nothing on this network should be reachable from host/LAN
+
+volumes:
+  alertmanager_data:
+    name: alertmanager_data
+
+configs:
+  alertmanager_yml:
+    file: ./config/alertmanager/alertmanager.yml
+
+secrets:
+  alertmanager_smtp_password:
+    file: ./secrets/alertmanager_smtp_password.txt

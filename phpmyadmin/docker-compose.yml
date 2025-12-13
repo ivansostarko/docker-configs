@@ -1,0 +1,117 @@
+services:
+  # phpMyAdmin (admin UI for MySQL/MariaDB)
+  phpmyadmin:
+    image: phpmyadmin:5.2.1-apache
+    container_name: phpmyadmin
+    hostname: phpmyadmin
+    restart: unless-stopped
+
+    # Optional: keep phpMyAdmin out of default `docker compose up`
+    profiles: ["admin"]
+
+    ports:
+      - "${PHPMYADMIN_PORT:-8081}:80"
+
+    env_file:
+      - .env
+
+    environment:
+      # Target DB service on the same Docker network
+      PMA_HOST: "${PMA_HOST:-wordpress-db}"
+      PMA_PORT: "${PMA_PORT:-3306}"
+
+      # Strong recommendation: do NOT use root long-term
+      PMA_USER: "${PMA_USER:-wp_admin}"
+      # PMA_PASSWORD is injected at runtime from the Docker secret (see command below)
+
+      # Hardening / usability
+      PMA_ARBITRARY: "0" # disable connecting to arbitrary hosts from the UI
+      PMA_ABSOLUTE_URI: "${PMA_ABSOLUTE_URI:-http://localhost:${PHPMYADMIN_PORT:-8081}/}"
+
+      # Common PHP limits for imports
+      UPLOAD_LIMIT: "${PMA_UPLOAD_LIMIT:-256M}"
+      MEMORY_LIMIT: "${PMA_MEMORY_LIMIT:-512M}"
+      MAX_EXECUTION_TIME: "${PMA_MAX_EXECUTION_TIME:-300}"
+
+    # Pull password from secret file at container start (no plaintext in compose/.env)
+    secrets:
+      - mysql_app_password
+    command: >
+      sh -c 'export PMA_PASSWORD="$(cat /run/secrets/mysql_app_password)"
+      && apache2-foreground'
+
+    # Align this with your DB service healthcheck
+    depends_on:
+      wordpress-db:
+        condition: service_healthy
+
+    networks:
+      - asterix_network
+
+    # Inject phpMyAdmin overrides
+    configs:
+      - source: phpmyadmin_config
+        target: /etc/phpmyadmin/config.user.inc.php
+
+    # Writable paths (keep FS mostly immutable)
+    tmpfs:
+      - /tmp
+      - /var/lib/php/sessions
+
+    # Container hardening (if anything breaks, remove these lines first)
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    labels:
+      - "com.docker.compose.service=phpmyadmin"
+
+  # Optional: container-level metrics for Prometheus via cAdvisor
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: cadvisor
+    restart: unless-stopped
+    profiles: ["metrics"]
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - asterix_network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  asterix_network:
+    name: asterix_network
+    driver: bridge
+    attachable: true
+
+secrets:
+  mysql_app_password:
+    file: ./secrets/mysql_app_password.txt
+
+configs:
+  phpmyadmin_config:
+    file: ./config/phpmyadmin/config.user.inc.php

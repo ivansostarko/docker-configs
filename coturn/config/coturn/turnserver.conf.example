@@ -1,0 +1,40 @@
+# Core
+fingerprint
+realm=turn.example.com
+server-name=coturn
+listening-port=3478
+tls-listening-port=5349
+
+# Interfaces / NAT
+listening-ip=0.0.0.0
+relay-ip=0.0.0.0
+
+# If behind NAT, set your public IP (critical).
+external-ip=203.0.113.10
+
+# Relay ports MUST match docker-compose relay range
+min-port=49152
+max-port=49200
+
+# Authentication (choose a single model and stick to it)
+lt-cred-mech
+
+# Option A: static user (simple)
+# user=exampleuser:examplepassword
+
+# Option B: REST API secret (recommended for production)
+# use-auth-secret
+# static-auth-secret=CHANGE_ME_TO_A_LONG_RANDOM_SECRET
+
+# TLS certs (mounted as Docker secrets by compose)
+cert=/run/secrets/coturn_fullchain.pem
+pkey=/run/secrets/coturn_privkey.pem
+
+# Sensible safety defaults
+no-loopback-peers
+no-multicast-peers
+
+# Logging (enable if you mount a log volume)
+# log-file=/var/log/coturn/turnserver.log
+# simple-log
+# verbose

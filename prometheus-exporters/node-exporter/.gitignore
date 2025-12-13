@@ -1,0 +1,6 @@
+# Do not commit secrets
+secrets/*
+!secrets/.keep
+
+# Local env overrides
+.env.local

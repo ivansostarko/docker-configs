@@ -1,0 +1,190 @@
+version: "3.9"
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-common: &common
+  restart: unless-stopped
+  env_file:
+    - .env
+  networks:
+    - asterix_network
+  logging: *default-logging
+  init: true
+
+services:
+  # ------------------------
+  # GlitchTip - DB migration job (runs once)
+  # ------------------------
+  glitchtip-migrate:
+    <<: *common
+    image: glitchtip/glitchtip:latest
+    depends_on:
+      glitchtip-postgres:
+        condition: service_healthy
+      glitchtip-redis:
+        condition: service_healthy
+    command: ./bin/run-migrate.sh
+    environment:
+      DATABASE_URL: ${GLITCHTIP_DATABASE_URL}
+      REDIS_URL: ${GLITCHTIP_REDIS_URL}
+      SECRET_KEY: ${GLITCHTIP_SECRET_KEY}
+      GLITCHTIP_DOMAIN: ${GLITCHTIP_DOMAIN}
+      EMAIL_URL: ${GLITCHTIP_EMAIL_URL}
+      DEFAULT_FROM_EMAIL: ${GLITCHTIP_DEFAULT_FROM_EMAIL}
+    volumes:
+      - glitchtip_uploads:/code/uploads
+    restart: "no"
+
+  # ------------------------
+  # GlitchTip - Web
+  # ------------------------
+  glitchtip:
+    <<: *common
+    image: glitchtip/glitchtip:latest
+    hostname: glitchtip
+    depends_on:
+      glitchtip-migrate:
+        condition: service_completed_successfully
+      glitchtip-postgres:
+        condition: service_healthy
+      glitchtip-redis:
+        condition: service_healthy
+
+    environment:
+      DATABASE_URL: ${GLITCHTIP_DATABASE_URL}
+      REDIS_URL: ${GLITCHTIP_REDIS_URL}
+      SECRET_KEY: ${GLITCHTIP_SECRET_KEY}
+      GLITCHTIP_DOMAIN: ${GLITCHTIP_DOMAIN}
+      EMAIL_URL: ${GLITCHTIP_EMAIL_URL}
+      DEFAULT_FROM_EMAIL: ${GLITCHTIP_DEFAULT_FROM_EMAIL}
+      PORT: "8000"
+
+      # Worker tuning (also used by worker service)
+      CELERY_WORKER_CONCURRENCY: ${GLITCHTIP_CELERY_WORKER_CONCURRENCY:-2}
+      CELERY_WORKER_MAX_TASKS_PER_CHILD: ${GLITCHTIP_CELERY_WORKER_MAX_TASKS_PER_CHILD:-10000}
+
+      # Optional: lock down self-registration after first user
+      ENABLE_USER_REGISTRATION: ${GLITCHTIP_ENABLE_USER_REGISTRATION:-true}
+
+    ports:
+      - "${GLITCHTIP_PORT:-8000}:8000"
+
+    volumes:
+      - glitchtip_uploads:/code/uploads
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8000/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+    security_opt:
+      - no-new-privileges:true
+
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+
+  # ------------------------
+  # GlitchTip - Worker (Celery + Beat)
+  # ------------------------
+  glitchtip-worker:
+    <<: *common
+    image: glitchtip/glitchtip:latest
+    hostname: glitchtip-worker
+    depends_on:
+      glitchtip-migrate:
+        condition: service_completed_successfully
+      glitchtip-postgres:
+        condition: service_healthy
+      glitchtip-redis:
+        condition: service_healthy
+
+    command: ./bin/run-celery-with-beat.sh
+
+    environment:
+      DATABASE_URL: ${GLITCHTIP_DATABASE_URL}
+      REDIS_URL: ${GLITCHTIP_REDIS_URL}
+      SECRET_KEY: ${GLITCHTIP_SECRET_KEY}
+      GLITCHTIP_DOMAIN: ${GLITCHTIP_DOMAIN}
+      EMAIL_URL: ${GLITCHTIP_EMAIL_URL}
+      DEFAULT_FROM_EMAIL: ${GLITCHTIP_DEFAULT_FROM_EMAIL}
+      CELERY_WORKER_CONCURRENCY: ${GLITCHTIP_CELERY_WORKER_CONCURRENCY:-2}
+      CELERY_WORKER_MAX_TASKS_PER_CHILD: ${GLITCHTIP_CELERY_WORKER_MAX_TASKS_PER_CHILD:-10000}
+
+    volumes:
+      - glitchtip_uploads:/code/uploads
+
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep -q '[c]elery' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+
+    security_opt:
+      - no-new-privileges:true
+
+  # ------------------------
+  # Redis
+  # ------------------------
+  glitchtip-redis:
+    <<: *common
+    image: redis:7
+    hostname: glitchtip-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - glitchtip_redis_data:/data
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  # ------------------------
+  # PostgreSQL
+  # ------------------------
+  glitchtip-postgres:
+    <<: *common
+    image: postgres:16
+    hostname: glitchtip-postgres
+    environment:
+      POSTGRES_DB: ${GLITCHTIP_POSTGRES_DB_DEFAULT}
+      POSTGRES_USER: ${GLITCHTIP_POSTGRES_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/glitchtip_postgres_password
+    secrets:
+      - glitchtip_postgres_password
+    volumes:
+      - glitchtip_postgres_data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${GLITCHTIP_POSTGRES_USER} -d ${GLITCHTIP_POSTGRES_DB_DEFAULT} -h 127.0.0.1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    shm_size: "1g"
+
+networks:
+  asterix_network:
+    name: asterix_network
+    driver: bridge
+
+volumes:
+  glitchtip_postgres_data:
+  glitchtip_redis_data:
+  glitchtip_uploads:
+
+secrets:
+  glitchtip_postgres_password:
+    file: ./secrets/glitchtip_postgres_password.txt

@@ -1,0 +1,16 @@
+# Node Exporter Web Configuration
+# Used by: --web.config.file=/etc/node-exporter/web-config.yml
+#
+# This example enables TLS + optional basic auth.
+# 1) Place cert/key in ./secrets/node-exporter.crt and ./secrets/node-exporter.key
+# 2) (Optional) Generate bcrypt password hash for basic auth:
+#      htpasswd -nbBC 12 prometheus 'YOUR_STRONG_PASSWORD' | cut -d: -f2
+#    Then paste it below.
+#
+tls_server_config:
+  cert_file: /run/secrets/node-exporter.crt
+  key_file: /run/secrets/node-exporter.key
+
+# Optional basic auth (bcrypt hashes, not plaintext).
+basic_auth_users:
+  # prometheus: "$2y$12$REPLACE_WITH_YOUR_BCRYPT_HASH"

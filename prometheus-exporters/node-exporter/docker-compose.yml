@@ -1,0 +1,91 @@
+version: "3.9"
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ------------------------
+  # Node Exporter
+  # ------------------------
+  node-exporter:
+    image: "prom/node-exporter:${NODE_EXPORTER_TAG}"
+    container_name: node-exporter
+    hostname: node-exporter
+    restart: unless-stopped
+
+    # Node exporter needs host namespaces to see accurate host metrics
+    pid: "host"
+
+    # Strongly recommended: DO NOT publish this on a public interface
+    # Bind to localhost by default; scrape over a private network/VPN/reverse-proxy if remote.
+    ports:
+      - "${NODE_EXPORTER_BIND}:${NODE_EXPORTER_PORT}:9100"
+
+    networks:
+      - asterix_network
+
+    # Hardening
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    # Explicit host mounts
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro,rslave
+
+    # Optional: enable TLS/basic-auth via web config
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+      - "--web.listen-address=:9100"
+      - "--web.telemetry-path=/metrics"
+      - "--collector.filesystem.mount-points-exclude=^/(proc|sys|dev|host|etc|rootfs/run)($$|/)"
+      - "--collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|mqueue|nsfs|overlay|proc|pstore|rpc_pipefs|securityfs|sysfs|tmpfs|tracefs)$$"
+      - "--web.config.file=/etc/node-exporter/web-config.yml"
+
+    configs:
+      - source: node_exporter_web_config
+        target: /etc/node-exporter/web-config.yml
+        mode: 0444
+
+    secrets:
+      - source: node_exporter_tls_cert
+        target: node-exporter.crt
+        mode: 0444
+      - source: node_exporter_tls_key
+        target: node-exporter.key
+        mode: 0400
+
+    labels:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "9100"
+      prometheus.io/path: "/metrics"
+
+    logging: *default-logging
+
+networks:
+  asterix_network:
+    name: asterix_network
+    driver: bridge
+    # If ALL scrapers live on the same Docker host/network, consider:
+    # internal: true
+
+configs:
+  node_exporter_web_config:
+    file: ./config/node-exporter/web-config.yml
+
+secrets:
+  node_exporter_tls_cert:
+    file: ./secrets/node-exporter.crt
+  node_exporter_tls_key:
+    file: ./secrets/node-exporter.key

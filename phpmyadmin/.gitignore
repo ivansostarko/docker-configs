@@ -1,0 +1,7 @@
+# Never commit secrets
+secrets/
+.env
+
+# OS / tooling
+.DS_Store
+*.swp
