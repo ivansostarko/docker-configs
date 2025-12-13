@@ -1,0 +1,171 @@
+version: "3.9"
+
+name: elasticsearch
+
+networks:
+  elastic:
+    name: elastic
+    driver: bridge
+
+volumes:
+  esdata:
+    name: esdata
+  escerts:
+    name: escerts
+
+secrets:
+  elastic_password:
+    file: ./secrets/elastic_password.txt
+
+services:
+  # One-time cert generation (idempotent). Produces:
+  # - CA:   /usr/share/elasticsearch/config/certs/ca/ca.crt (+ key)
+  # - Node: /usr/share/elasticsearch/config/certs/es01/es01.crt (+ key)
+  es-certs:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION}
+    container_name: es-certs
+    user: "0:0"
+    networks: [elastic]
+    volumes:
+      - escerts:/usr/share/elasticsearch/config/certs
+      - ./config/instances.yml:/usr/share/elasticsearch/config/instances.yml:ro
+    entrypoint: ["/bin/bash", "-lc"]
+    command: >
+      set -euo pipefail;
+      CERTS_DIR=/usr/share/elasticsearch/config/certs;
+      if [ -f "${CERTS_DIR}/ca/ca.crt" ] && [ -f "${CERTS_DIR}/es01/es01.crt" ]; then
+        echo "Certificates already exist; skipping.";
+        exit 0;
+      fi;
+
+      echo "Generating CA (PEM)...";
+      mkdir -p "${CERTS_DIR}";
+      cd "${CERTS_DIR}";
+      rm -rf ca es01 *.zip || true;
+
+      /usr/share/elasticsearch/bin/elasticsearch-certutil ca --silent --pem -out ca.zip;
+      unzip -q ca.zip -d .;
+      rm -f ca.zip;
+
+      echo "Generating node certs (PEM) from instances.yml...";
+      /usr/share/elasticsearch/bin/elasticsearch-certutil cert --silent --pem         --in /usr/share/elasticsearch/config/instances.yml         --out certs.zip         --ca-cert "${CERTS_DIR}/ca/ca.crt"         --ca-key  "${CERTS_DIR}/ca/ca.key";
+
+      unzip -q certs.zip -d .;
+      rm -f certs.zip;
+
+      # Ensure elasticsearch user can read keys/certs
+      chown -R 1000:0 "${CERTS_DIR}";
+      find "${CERTS_DIR}" -type d -exec chmod 750 {} \;;
+      find "${CERTS_DIR}" -type f -exec chmod 640 {} \;;
+
+      echo "Done."
+
+    restart: "no"
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION}
+    container_name: es01
+    depends_on:
+      es-certs:
+        condition: service_completed_successfully
+    networks: [elastic]
+    ports:
+      - "${ES_HTTP_PORT}:9200"
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+      - escerts:/usr/share/elasticsearch/config/certs:ro
+      - ./config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+
+    # Hardening + kernel tuning that Elasticsearch expects
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    cap_add:
+      - IPC_LOCK
+    environment:
+      # Core node settings
+      node.name: "es01"
+      cluster.name: "${ES_CLUSTER_NAME}"
+      discovery.type: "single-node"
+      bootstrap.memory_lock: "true"
+
+      # JVM sizing; keep explicit (avoid surprises)
+      ES_JAVA_OPTS: "${ES_JAVA_OPTS}"
+
+      # Security: set elastic superuser password via secret file (preferred over env var)
+      ELASTIC_PASSWORD_FILE: "/run/secrets/elastic_password"
+
+      # Enable security explicitly (8.x defaults to on; be explicit anyway)
+      xpack.security.enabled: "true"
+
+      # TLS for HTTP (client->ES) and transport (node->node)
+      xpack.security.http.ssl.enabled: "true"
+      xpack.security.http.ssl.certificate_authorities: "certs/ca/ca.crt"
+      xpack.security.http.ssl.certificate: "certs/es01/es01.crt"
+      xpack.security.http.ssl.key: "certs/es01/es01.key"
+
+      xpack.security.transport.ssl.enabled: "true"
+      xpack.security.transport.ssl.verification_mode: "certificate"
+      xpack.security.transport.ssl.certificate_authorities: "certs/ca/ca.crt"
+      xpack.security.transport.ssl.certificate: "certs/es01/es01.crt"
+      xpack.security.transport.ssl.key: "certs/es01/es01.key"
+
+    secrets:
+      - elastic_password
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "set -e; PASS=$$(cat /run/secrets/elastic_password); curl -fsS --cacert /usr/share/elasticsearch/config/certs/ca/ca.crt -u elastic:$$PASS https://localhost:9200/_cluster/health?wait_for_status=yellow\&timeout=5s | grep -q '\"status\"'"
+        ]
+      interval: 10s
+      timeout: 6s
+      retries: 30
+      start_period: 30s
+
+    # Avoid running as root
+    user: "1000:0"
+
+    # If you run on Linux, ES still needs host sysctl vm.max_map_count=262144
+    # You can also set it here, but it may be ignored on some platforms.
+    sysctls:
+      - vm.max_map_count=262144
+
+    restart: unless-stopped
+
+  # Prometheus metrics exporter (HTTP endpoint :9114)
+  elasticsearch_exporter:
+    image: quay.io/prometheuscommunity/elasticsearch-exporter:${ES_EXPORTER_VERSION}
+    container_name: es-exporter
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks: [elastic]
+    ports:
+      - "${ES_EXPORTER_PORT}:9114"
+    secrets:
+      - elastic_password
+    volumes:
+      - escerts:/certs:ro
+    environment:
+      ES_URI: "https://es01:9200"
+    entrypoint: ["/bin/sh", "-lc"]
+    # Read secret -> env var just-in-time (so you don't leak it into docker inspect)
+    command: >
+      ES_PASSWORD="$$(cat /run/secrets/elastic_password)";
+      exec /bin/elasticsearch_exporter
+      --es.uri="https://es01:9200"
+      --es.all
+      --es.indices
+      --es.shards
+      --es.snapshots
+      --es.ssl-skip-verify=false
+      --es.ca="/certs/ca/ca.crt"
+      --es.user="elastic"
+      --es.password="$$ES_PASSWORD"
+    restart: unless-stopped

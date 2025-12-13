@@ -1,0 +1,9 @@
+# Non-sensitive Kibana config. Secrets go into the Kibana keystore (created by kibana-init).
+server.host: "0.0.0.0"
+
+# If you run behind a reverse proxy on a sub-path, uncomment:
+# server.basePath: "/kibana"
+# server.rewriteBasePath: true
+
+telemetry.enabled: false
+telemetry.allowChangingOptInStatus: false

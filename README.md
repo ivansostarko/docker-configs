@@ -7,9 +7,20 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 
 ### Apps
 - [Wordpress](/wordpress/README.md)
-- [Laravel](/laravel/README.md)
 - [NextCloud](/nextcloud/README.md)
 - [Passbolt](/passbolt/README.md)
+
+
+### Programming languages
+- [PHP](/php/README.md)
+- [NodeJS](/nodejs/README.md)
+
+### Frameworks
+- [Laravel](/laravel/README.md)
+- [Java Spring Boot](/java-spring/README.md)
+- [Flutter](/flutter/README.md)
+
+
 
 ### Web servers
 - [Apache](/apache/README.md)
@@ -54,6 +65,8 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 
 ### Networks and VPN
 - [CoreDNS](/coredns/README.md)
+- [Wireguard](/wireguard/README.md)
+- [Tor](/tor/README.md)
 
 ### Email
 - [Postal](/postal/README.md)
@@ -68,6 +81,7 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 
 ### Storage
 - [Minio](/minio/README.md)
+- [Gluster](/gluster/README.md)
 
 ### queue
 - [Kafka](/kafka/README.md)
@@ -81,6 +95,7 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [MySql Backup](/mysql-backup/README.md)
 - [Postgres Backup](/postgres-backup/README.md)
 - [MongoDB Backup](/mongodb-backup/README.md)
+- Bacula
 
 ### Metrics / Prometheus Exporters
 - [Coturn Exporter](/prometheus-exporters/coturn-exporter/README.md)

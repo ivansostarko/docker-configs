@@ -1,0 +1,31 @@
+metricbeat.modules:
+  - module: docker
+    metricsets: ["container", "cpu", "diskio", "event", "healthcheck", "info", "memory", "network"]
+    hosts: ["unix:///var/run/docker.sock"]
+    period: 10s
+
+  - module: system
+    period: 10s
+    metricsets: ["cpu", "load", "memory", "network", "process", "process_summary", "filesystem", "fsstat"]
+    processors:
+      - add_fields:
+          target: host
+          fields:
+            filesystem.ignore_types: ["overlay", "aufs"]
+
+  - module: logstash
+    metricsets: ["node", "node_stats"]
+    hosts: ["http://logstash:9600"]
+    period: 10s
+
+processors:
+  - add_host_metadata: {}
+  - add_cloud_metadata: {}
+
+output.elasticsearch:
+  hosts: ["${METRICBEAT_TO_ELASTICSEARCH_HOSTS}"]
+  username: "${ELASTIC_USERNAME}"
+  password: "${ES_PWD}"
+  ssl:
+    enabled: true
+    certificate_authorities: ["${ELASTIC_CA_CERT}"]

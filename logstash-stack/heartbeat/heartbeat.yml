@@ -1,0 +1,20 @@
+heartbeat.monitors:
+  - type: tcp
+    id: logstash-beats
+    name: Logstash Beats Port
+    hosts: ["logstash:5044"]
+    schedule: "@every 10s"
+
+  - type: http
+    id: logstash-api
+    name: Logstash API
+    urls: ["http://logstash:9600"]
+    schedule: "@every 10s"
+
+output.elasticsearch:
+  hosts: ["${HEARTBEAT_TO_ELASTICSEARCH_HOSTS}"]
+  username: "${ELASTIC_USERNAME}"
+  password: "${ES_PWD}"
+  ssl:
+    enabled: true
+    certificate_authorities: ["${ELASTIC_CA_CERT}"]

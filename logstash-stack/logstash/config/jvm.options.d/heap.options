@@ -1,0 +1,4 @@
+# Heap is set via LS_JAVA_OPTS (from .env), keep this file for clarity and tooling.
+# Example:
+# -Xms1g
+# -Xmx1g

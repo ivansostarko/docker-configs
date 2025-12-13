@@ -1,0 +1,35 @@
+filebeat.inputs:
+  - type: filestream
+    id: docker-containers
+    enabled: true
+    paths:
+      - /var/lib/docker/containers/*/*.log
+    parsers:
+      - ndjson:
+          target: ""
+          add_error_key: true
+          overwrite_keys: true
+    processors:
+      - add_docker_metadata:
+          host: "unix:///var/run/docker.sock"
+
+  - type: filestream
+    id: host-syslog
+    enabled: true
+    paths:
+      - /var/log/syslog*
+      - /var/log/messages*
+      - /var/log/auth.log*
+
+processors:
+  - add_host_metadata: {}
+  - add_cloud_metadata: {}
+  - add_fields:
+      target: event
+      fields:
+        dataset: "filebeat"
+
+output.logstash:
+  hosts: ["${FILEBEAT_TO_LOGSTASH_HOST}:${FILEBEAT_TO_LOGSTASH_PORT}"]
+
+logging.level: info

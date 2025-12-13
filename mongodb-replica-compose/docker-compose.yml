@@ -1,0 +1,252 @@
+version: "3.9"
+
+name: mongodb-replica
+
+services:
+  mongo1:
+    build:
+      context: ./mongo
+      args:
+        MONGO_VERSION: ${MONGO_VERSION}
+    container_name: mongo1
+    hostname: mongo1
+    restart: unless-stopped
+    command: ["mongod", "--config", "/etc/mongo/mongod.conf"]
+    env_file: ./.env
+    environment:
+      # Root user is created ONLY on the first node; users will replicate to other members.
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/mongo_root_password
+    secrets:
+      - mongo_root_password
+      - mongo_keyfile
+    configs:
+      - source: mongod_conf
+        target: /etc/mongo/mongod.conf
+        mode: 0444
+    volumes:
+      - mongo1_data:/data/db
+    networks:
+      - mongo_net
+    ports:
+      # Expose only one entrypoint to the replica set (clients will discover the rest).
+      - "${MONGO_PUBLISHED_PORT}:27017"
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok' 127.0.0.1:27017 | grep 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 25s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  mongo2:
+    build:
+      context: ./mongo
+      args:
+        MONGO_VERSION: ${MONGO_VERSION}
+    container_name: mongo2
+    hostname: mongo2
+    restart: unless-stopped
+    command: ["mongod", "--config", "/etc/mongo/mongod.conf"]
+    env_file: ./.env
+    # Do NOT set MONGO_INITDB_ROOT_* here. Users will replicate from the primary.
+    secrets:
+      - mongo_keyfile
+    configs:
+      - source: mongod_conf
+        target: /etc/mongo/mongod.conf
+        mode: 0444
+    volumes:
+      - mongo2_data:/data/db
+    networks:
+      - mongo_net
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok' 127.0.0.1:27017 | grep 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 25s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  mongo3:
+    build:
+      context: ./mongo
+      args:
+        MONGO_VERSION: ${MONGO_VERSION}
+    container_name: mongo3
+    hostname: mongo3
+    restart: unless-stopped
+    command: ["mongod", "--config", "/etc/mongo/mongod.conf"]
+    env_file: ./.env
+    secrets:
+      - mongo_keyfile
+    configs:
+      - source: mongod_conf
+        target: /etc/mongo/mongod.conf
+        mode: 0444
+    volumes:
+      - mongo3_data:/data/db
+    networks:
+      - mongo_net
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok' 127.0.0.1:27017 | grep 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 25s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # One-shot initializer:
+  # - Initiates the replica set
+  # - Adds members
+  # - Creates the application user and the metrics/exporter user (idempotent)
+  mongo-init:
+    image: mongo:${MONGO_VERSION}
+    container_name: mongo-init
+    depends_on:
+      mongo1:
+        condition: service_healthy
+      mongo2:
+        condition: service_healthy
+      mongo3:
+        condition: service_healthy
+    restart: "no"
+    env_file: ./.env
+    secrets:
+      - mongo_root_password
+      - mongo_app_password
+      - mongo_exporter_password
+    volumes:
+      - ./scripts:/scripts:ro
+    networks:
+      - mongo_net
+    entrypoint: ["/bin/bash", "/scripts/rs-init.sh"]
+
+  # Metrics (optional): enable with `docker compose --profile monitoring up -d`
+  mongodb-exporter:
+    image: percona/mongodb_exporter:${MONGO_EXPORTER_VERSION}
+    container_name: mongodb-exporter
+    profiles: ["monitoring"]
+    depends_on:
+      mongo1:
+        condition: service_healthy
+    restart: unless-stopped
+    env_file: ./.env
+    secrets:
+      - mongo_exporter_password
+    networks:
+      - mongo_net
+      - monitoring
+    ports:
+      - "${MONGO_EXPORTER_PUBLISHED_PORT}:9216"
+    entrypoint: ["/bin/sh", "-ec"]
+    command: >
+      export MONGODB_USER="${MONGO_EXPORTER_USERNAME}";
+      export MONGODB_PASSWORD="$(cat /run/secrets/mongo_exporter_password)";
+      exec mongodb_exporter
+      --mongodb.uri="mongodb://${MONGO_EXPORTER_URI_HOSTS}/admin?replicaSet=${MONGO_REPLICA_SET}&authSource=admin"
+      --web.listen-address=":9216";
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9216/metrics >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  prometheus:
+    image: prom/prometheus:${PROMETHEUS_VERSION}
+    container_name: prometheus
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    volumes:
+      - prometheus_data:/prometheus
+    configs:
+      - source: prometheus_yml
+        target: /etc/prometheus/prometheus.yml
+        mode: 0444
+    networks:
+      - monitoring
+    ports:
+      - "${PROMETHEUS_PUBLISHED_PORT}:9090"
+    depends_on:
+      mongodb-exporter:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/healthy >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  grafana:
+    image: grafana/grafana:${GRAFANA_VERSION}
+    container_name: grafana
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    env_file: ./.env
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD_FILE: /run/secrets/grafana_admin_password
+    secrets:
+      - grafana_admin_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - monitoring
+    ports:
+      - "${GRAFANA_PUBLISHED_PORT}:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+networks:
+  mongo_net:
+    driver: bridge
+    internal: true
+  monitoring:
+    driver: bridge
+
+volumes:
+  mongo1_data:
+  mongo2_data:
+  mongo3_data:
+  prometheus_data:
+  grafana_data:
+
+configs:
+  mongod_conf:
+    file: ./mongo/config/mongod.conf
+  prometheus_yml:
+    file: ./monitoring/prometheus/prometheus.yml
+
+secrets:
+  # Create these files locally (see README). Compose will mount them at /run/secrets/<name>.
+  mongo_root_password:
+    file: ./secrets/mongo_root_password.txt
+  mongo_keyfile:
+    file: ./secrets/mongo_keyfile.txt
+  mongo_app_password:
+    file: ./secrets/mongo_app_password.txt
+  mongo_exporter_password:
+    file: ./secrets/mongo_exporter_password.txt
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password.txt

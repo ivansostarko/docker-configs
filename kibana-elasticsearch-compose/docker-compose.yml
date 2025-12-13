@@ -1,0 +1,255 @@
+version: "3.9"
+
+name: ${COMPOSE_PROJECT_NAME:-elastic-stack}
+
+services:
+  es-setup:
+    image: ${ES_IMAGE:-docker.elastic.co/elasticsearch/elasticsearch}:${STACK_VERSION}
+    container_name: ${COMPOSE_PROJECT_NAME:-elastic-stack}-es-setup
+    user: "0:0"
+    restart: "no"
+    networks: [observability]
+    volumes:
+      - es-config:/usr/share/elasticsearch/config
+    secrets: [elastic_password, kibana_system_password]
+    environment:
+      ES_NODE_NAME: ${ES_NODE_NAME:-es01}
+      ES_CLUSTER_NAME: ${ES_CLUSTER_NAME:-docker-cluster}
+    entrypoint: ["/bin/bash","-lc"]
+    command: >
+      set -euo pipefail;
+      echo "[es-setup] Preparing certs and keystore...";
+      mkdir -p /usr/share/elasticsearch/config/certs;
+      chmod 750 /usr/share/elasticsearch/config /usr/share/elasticsearch/config/certs;
+
+      if [ ! -f /usr/share/elasticsearch/config/certs/ca/ca.crt ]; then
+        echo "[es-setup] Generating CA...";
+        mkdir -p /usr/share/elasticsearch/config/certs/ca;
+        /usr/share/elasticsearch/bin/elasticsearch-certutil ca --silent --pem
+          -out /usr/share/elasticsearch/config/certs/ca/ca.zip;
+        unzip -o /usr/share/elasticsearch/config/certs/ca/ca.zip -d /usr/share/elasticsearch/config/certs/ca >/dev/null;
+        rm -f /usr/share/elasticsearch/config/certs/ca/ca.zip;
+      fi
+
+      if [ ! -f /usr/share/elasticsearch/config/certs/${ES_NODE_NAME:-es01}/${ES_NODE_NAME:-es01}.crt ]; then
+        echo "[es-setup] Generating node certificates...";
+        cat > /usr/share/elasticsearch/config/certs/instances.yml <<YML
+      instances:
+        - name: ${ES_NODE_NAME:-es01}
+          dns: [${ES_NODE_NAME:-es01}, localhost]
+          ip: [127.0.0.1]
+      YML
+        /usr/share/elasticsearch/bin/elasticsearch-certutil cert --silent --pem
+          --in /usr/share/elasticsearch/config/certs/instances.yml
+          --ca-cert /usr/share/elasticsearch/config/certs/ca/ca/ca.crt
+          --ca-key  /usr/share/elasticsearch/config/certs/ca/ca/ca.key
+          -out /usr/share/elasticsearch/config/certs/certs.zip;
+        unzip -o /usr/share/elasticsearch/config/certs/certs.zip -d /usr/share/elasticsearch/config/certs >/dev/null;
+        rm -f /usr/share/elasticsearch/config/certs/certs.zip /usr/share/elasticsearch/config/certs/instances.yml;
+      fi
+
+      if [ ! -f /usr/share/elasticsearch/config/elasticsearch.keystore ]; then
+        echo "[es-setup] Creating Elasticsearch keystore...";
+        /usr/share/elasticsearch/bin/elasticsearch-keystore create;
+      fi
+
+      echo "[es-setup] Setting bootstrap.password...";
+      cat /run/secrets/elastic_password | /usr/share/elasticsearch/bin/elasticsearch-keystore add -x --force "bootstrap.password" >/dev/null;
+
+      chown -R 1000:0 /usr/share/elasticsearch/config;
+      find /usr/share/elasticsearch/config -type d -exec chmod 750 {} \;
+      find /usr/share/elasticsearch/config -type f -exec chmod 640 {} \;
+
+      echo "[es-setup] Done.";
+
+  elasticsearch:
+    image: ${ES_IMAGE:-docker.elastic.co/elasticsearch/elasticsearch}:${STACK_VERSION}
+    container_name: ${COMPOSE_PROJECT_NAME:-elastic-stack}-es01
+    restart: unless-stopped
+    depends_on:
+      es-setup:
+        condition: service_completed_successfully
+    networks: [observability]
+    ports:
+      - "${ES_HTTP_PORT:-9200}:9200"
+    environment:
+      node.name: ${ES_NODE_NAME:-es01}
+      cluster.name: ${ES_CLUSTER_NAME:-docker-cluster}
+      discovery.type: single-node
+      bootstrap.memory_lock: "true"
+
+      xpack.security.enabled: "true"
+
+      xpack.security.http.ssl.enabled: "true"
+      xpack.security.http.ssl.key: certs/${ES_NODE_NAME:-es01}/${ES_NODE_NAME:-es01}.key
+      xpack.security.http.ssl.certificate: certs/${ES_NODE_NAME:-es01}/${ES_NODE_NAME:-es01}.crt
+      xpack.security.http.ssl.certificate_authorities: certs/ca/ca/ca.crt
+
+      xpack.security.transport.ssl.enabled: "true"
+      xpack.security.transport.ssl.verification_mode: certificate
+      xpack.security.transport.ssl.key: certs/${ES_NODE_NAME:-es01}/${ES_NODE_NAME:-es01}.key
+      xpack.security.transport.ssl.certificate: certs/${ES_NODE_NAME:-es01}/${ES_NODE_NAME:-es01}.crt
+      xpack.security.transport.ssl.certificate_authorities: certs/ca/ca/ca.crt
+
+      ES_JAVA_OPTS: ${ES_JAVA_OPTS:--Xms1g -Xmx1g}
+    ulimits:
+      memlock: {soft: -1, hard: -1}
+      nofile: {soft: 65535, hard: 65535}
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+      - es-config:/usr/share/elasticsearch/config
+    healthcheck:
+      test: ["CMD-SHELL", "code=$(curl -s -o /dev/null -w '%{http_code}' --cacert /usr/share/elasticsearch/config/certs/ca/ca/ca.crt https://127.0.0.1:9200/ || true); [ "$code" = "200" ] || [ "$code" = "401" ]"]
+      interval: 15s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  kibana-init:
+    image: ${KIBANA_IMAGE:-docker.elastic.co/kibana/kibana}:${STACK_VERSION}
+    container_name: ${COMPOSE_PROJECT_NAME:-elastic-stack}-kibana-init
+    user: "0:0"
+    restart: "no"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks: [observability]
+    volumes:
+      - kibana-data:/usr/share/kibana/data
+    secrets: [kibana_system_password, kibana_enc_security, kibana_enc_saved_objects, kibana_enc_reporting]
+    entrypoint: ["/bin/bash","-lc"]
+    command: >
+      set -euo pipefail;
+      echo "[kibana-init] Ensuring kibana keystore exists...";
+      if [ ! -f /usr/share/kibana/data/kibana.keystore ]; then /usr/share/kibana/bin/kibana-keystore create; fi;
+
+      add_setting () {
+        local setting="$1"; local secret_file="$2"; local val;
+        val="$(cat "$secret_file")";
+        printf '"%s"' "$val" | /usr/share/kibana/bin/kibana-keystore add --stdin --force "$setting" >/dev/null;
+        echo "[kibana-init] Set $setting";
+      }
+
+      add_setting "elasticsearch.password" "/run/secrets/kibana_system_password";
+      add_setting "xpack.security.encryptionKey" "/run/secrets/kibana_enc_security";
+      add_setting "xpack.encryptedSavedObjects.encryptionKey" "/run/secrets/kibana_enc_saved_objects";
+      add_setting "xpack.reporting.encryptionKey" "/run/secrets/kibana_enc_reporting";
+
+      chown -R 1000:0 /usr/share/kibana/data;
+      find /usr/share/kibana/data -type d -exec chmod 750 {} \;
+      find /usr/share/kibana/data -type f -exec chmod 640 {} \;
+
+      echo "[kibana-init] Done.";
+
+  kibana:
+    image: ${KIBANA_IMAGE:-docker.elastic.co/kibana/kibana}:${STACK_VERSION}
+    container_name: ${COMPOSE_PROJECT_NAME:-elastic-stack}-kibana
+    restart: unless-stopped
+    depends_on:
+      kibana-init:
+        condition: service_completed_successfully
+    ports:
+      - "${KIBANA_PORT:-5601}:5601"
+    environment:
+      SERVER_NAME: ${KIBANA_SERVER_NAME:-kibana}
+      SERVER_HOST: "0.0.0.0"
+      ELASTICSEARCH_HOSTS: ${ELASTICSEARCH_HOSTS:-'["https://elasticsearch:9200"]'}
+      ELASTICSEARCH_USERNAME: ${ELASTICSEARCH_USERNAME:-kibana_system}
+      ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES: /usr/share/kibana/config/certs/ca/ca/ca.crt
+      ELASTICSEARCH_SSL_VERIFICATIONMODE: certificate
+      LOGGING_ROOT_LEVEL: ${KIBANA_LOG_LEVEL:-info}
+      XPACK_REPORTING_CAPTURE_BROWSER_CHROMIUM_DISABLESANDBOX: "true"
+    volumes:
+      - ./kibana/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
+      - es-config:/usr/share/kibana/config/certs:ro
+      - kibana-data:/usr/share/kibana/data
+    networks: [observability, edge]
+    read_only: true
+    tmpfs: ["/tmp", "/usr/share/kibana/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5601/api/status || true); [ "$code" = "200" ] || [ "$code" = "401" ]"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  kibana-metrics-exporter:
+    image: chamilad/kibana-prometheus-exporter:${KIBANA_EXPORTER_TAG:-v8.7.x.0}
+    container_name: ${COMPOSE_PROJECT_NAME:-elastic-stack}-kibana-exporter
+    restart: unless-stopped
+    profiles: ["metrics"]
+    networks: [observability]
+    depends_on:
+      kibana:
+        condition: service_healthy
+    secrets: [kibana_exporter_password]
+    entrypoint: ["/bin/sh","-c"]
+    command: >
+      exec kibana-exporter
+      -kibana.uri http://kibana:5601
+      -kibana.username ${KIBANA_EXPORTER_USERNAME:-elastic}
+      -kibana.password "$$(cat /run/secrets/kibana_exporter_password)"
+      -web.listen-address :9684
+      -web.telemetry-path /metrics
+      -wait
+    ports:
+      - "${KIBANA_EXPORTER_PORT:-9684}:9684"
+
+  elasticsearch-exporter:
+    image: quay.io/prometheuscommunity/elasticsearch-exporter:${ES_EXPORTER_TAG:-v1.7.0}
+    container_name: ${COMPOSE_PROJECT_NAME:-elastic-stack}-es-exporter
+    restart: unless-stopped
+    profiles: ["metrics"]
+    networks: [observability]
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    secrets: [elastic_password]
+    volumes:
+      - es-config:/certs:ro
+    environment:
+      ES_USER: ${ES_EXPORTER_USERNAME:-elastic}
+    entrypoint: ["/bin/sh","-c"]
+    command: >
+      exec /bin/elasticsearch_exporter
+      --es.uri="https://$${ES_USER}:$$(cat /run/secrets/elastic_password)@elasticsearch:9200"
+      --es.all
+      --es.indices
+      --es.shards
+      --es.timeout=30s
+      --web.listen-address=":9114"
+      --ssl-ca=/certs/ca/ca/ca.crt
+    ports:
+      - "${ES_EXPORTER_PORT:-9114}:9114"
+
+volumes:
+  es-data: {}
+  es-config: {}
+  kibana-data: {}
+
+networks:
+  observability:
+    name: ${OBS_NET_NAME:-elastic-observability}
+    driver: bridge
+    internal: true
+  edge:
+    name: ${EDGE_NET_NAME:-elastic-edge}
+    driver: bridge
+
+secrets:
+  elastic_password:
+    file: ./secrets/elastic_password.txt
+  kibana_system_password:
+    file: ./secrets/kibana_system_password.txt
+  kibana_enc_security:
+    file: ./secrets/kibana_enc_security.txt
+  kibana_enc_saved_objects:
+    file: ./secrets/kibana_enc_saved_objects.txt
+  kibana_enc_reporting:
+    file: ./secrets/kibana_enc_reporting.txt
+  kibana_exporter_password:
+    file: ./secrets/kibana_exporter_password.txt

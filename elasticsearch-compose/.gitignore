@@ -1,0 +1,6 @@
+# Secrets
+/secrets/*.txt
+
+# Data volumes are external to repo, but keep local artifacts out
+*.log
+.DS_Store

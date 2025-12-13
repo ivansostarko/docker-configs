@@ -1,0 +1,220 @@
+services:
+  # --- One-time helper: creates Logstash keystore and adds secrets (recommended) ---
+  logstash-setup:
+    image: docker.elastic.co/logstash/logstash:${STACK_VERSION}
+    container_name: logstash-setup
+    user: "0:0"
+    entrypoint: ["/bin/bash", "-lc"]
+    command: >
+      set -euo pipefail;
+      mkdir -p /usr/share/logstash/config;
+      if [ ! -f /usr/share/logstash/config/logstash.keystore ]; then
+        echo "Creating Logstash keystore...";
+        export LOGSTASH_KEYSTORE_PASS="$(cat /run/secrets/logstash_keystore_password)";
+        /usr/share/logstash/bin/logstash-keystore create;
+        echo "Adding secrets...";
+        echo -n "$(cat /run/secrets/elastic_password)" | /usr/share/logstash/bin/logstash-keystore add -x ES_PWD;
+      else
+        echo "Keystore already exists, skipping.";
+      fi
+    volumes:
+      - logstash_config:/usr/share/logstash/config
+    secrets:
+      - elastic_password
+      - logstash_keystore_password
+    profiles: ["setup"]
+    restart: "no"
+    networks:
+      - observability_private
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:${STACK_VERSION}
+    container_name: logstash
+    depends_on:
+      logstash-setup:
+        condition: service_completed_successfully
+    environment:
+      # JVM
+      LS_JAVA_OPTS: "-Xms${LS_JAVA_HEAP} -Xmx${LS_JAVA_HEAP}"
+
+      # Pipeline/env
+      ELASTICSEARCH_HOSTS: ${ELASTICSEARCH_HOSTS}
+      ELASTIC_USERNAME: ${ELASTIC_USERNAME}
+      LS_INDEX_PREFIX: ${LS_INDEX_PREFIX}
+
+      # Logstash internal settings
+      LOG_LEVEL: info
+
+      # Keystore password must be present for keystore reads
+      LOGSTASH_KEYSTORE_PASS: /run/secrets/logstash_keystore_password
+
+      # Optional: turn on debug stdout pipeline via env (used by pipeline config)
+      ENABLE_DEBUG_STDOUT: ${ENABLE_DEBUG_STDOUT}
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - logstash_data:/usr/share/logstash/data
+      - logstash_config:/usr/share/logstash/config
+      - ./logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      - ./logstash/config/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
+      - ./logstash/config/jvm.options.d/heap.options:/usr/share/logstash/config/jvm.options.d/heap.options:ro
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
+    ports:
+      - "${LOGSTASH_BEATS_PORT}:5044"
+      - "${LOGSTASH_SYSLOG_TCP}:5514"
+      - "${LOGSTASH_SYSLOG_UDP}:5514/udp"
+      - "${LOGSTASH_HTTP_PORT}:8080"
+      - "${LOGSTASH_API_PORT}:9600"
+    secrets:
+      - elastic_password
+      - logstash_keystore_password
+      - elastic_ca_crt
+    healthcheck:
+      # Uses Logstash Monitoring API port. Avoid curl dependency; use bash /dev/tcp.
+      test: ["CMD-SHELL", "bash -lc 'echo > /dev/tcp/127.0.0.1/9600'"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - observability_private
+      - observability_public
+
+  # --- Filebeat: collects host + docker container logs, ships to Logstash ---
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:${STACK_VERSION}
+    container_name: filebeat
+    user: "0:0"
+    depends_on:
+      logstash:
+        condition: service_healthy
+    command: ["--strict.perms=false"]
+    volumes:
+      - filebeat_data:/usr/share/filebeat/data
+      - ./filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      # Docker logs (works if Docker uses json-file logging driver)
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Common host logs (adjust for your OS)
+      - /var/log:/var/log:ro
+    environment:
+      FILEBEAT_TO_LOGSTASH_HOST: ${FILEBEAT_TO_LOGSTASH_HOST}
+      FILEBEAT_TO_LOGSTASH_PORT: ${FILEBEAT_TO_LOGSTASH_PORT}
+    restart: unless-stopped
+    networks:
+      - observability_private
+    profiles: ["agents"]
+
+  # --- Metricbeat: docker + system metrics, plus Logstash monitoring via API ---
+  metricbeat:
+    image: docker.elastic.co/beats/metricbeat:${STACK_VERSION}
+    container_name: metricbeat
+    user: "0:0"
+    depends_on:
+      logstash:
+        condition: service_healthy
+    command: ["--strict.perms=false"]
+    volumes:
+      - metricbeat_data:/usr/share/metricbeat/data
+      - ./metricbeat/metricbeat.yml:/usr/share/metricbeat/metricbeat.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc:/hostfs/proc:ro
+      - /sys/fs/cgroup:/hostfs/sys/fs/cgroup:ro
+      - /:/hostfs:ro
+    secrets:
+      - elastic_password
+      - elastic_ca_crt
+    environment:
+      METRICBEAT_TO_ELASTICSEARCH_HOSTS: ${METRICBEAT_TO_ELASTICSEARCH_HOSTS}
+      ELASTIC_USERNAME: ${ELASTIC_USERNAME}
+    restart: unless-stopped
+    networks:
+      - observability_private
+    profiles: ["agents"]
+
+  # --- Heartbeat: simple availability checks (optional) ---
+  heartbeat:
+    image: docker.elastic.co/beats/heartbeat:${STACK_VERSION}
+    container_name: heartbeat
+    user: "0:0"
+    depends_on:
+      logstash:
+        condition: service_healthy
+    command: ["--strict.perms=false"]
+    volumes:
+      - heartbeat_data:/usr/share/heartbeat/data
+      - ./heartbeat/heartbeat.yml:/usr/share/heartbeat/heartbeat.yml:ro
+    secrets:
+      - elastic_password
+      - elastic_ca_crt
+    environment:
+      HEARTBEAT_TO_ELASTICSEARCH_HOSTS: ${HEARTBEAT_TO_ELASTICSEARCH_HOSTS}
+      ELASTIC_USERNAME: ${ELASTIC_USERNAME}
+    restart: unless-stopped
+    networks:
+      - observability_private
+    profiles: ["agents"]
+
+  # --- Prometheus exporter for Logstash pipeline stats (scrape friendly) ---
+  logstash-exporter:
+    image: ghcr.io/bitnami/logstash-exporter:latest
+    container_name: logstash-exporter
+    depends_on:
+      logstash:
+        condition: service_healthy
+    environment:
+      LOGSTASH_URL: "http://logstash:9600"
+      WEB_LISTEN_ADDRESS: ":${LOGSTASH_EXPORTER_PORT}"
+    ports:
+      - "${LOGSTASH_EXPORTER_PORT}:${LOGSTASH_EXPORTER_PORT}"
+    restart: unless-stopped
+    networks:
+      - observability_private
+      - observability_public
+    profiles: ["metrics"]
+
+  # --- Optional: Prometheus in same compose (only if you really want it here) ---
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    depends_on:
+      logstash-exporter:
+        condition: service_started
+    volumes:
+      - prometheus_data:/prometheus
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+    networks:
+      - observability_private
+      - observability_public
+    profiles: ["metrics"]
+
+networks:
+  observability_private:
+    name: ${PRIVATE_NET}
+    driver: bridge
+    internal: true
+  observability_public:
+    name: ${PUBLIC_NET}
+    driver: bridge
+
+volumes:
+  logstash_data:
+  logstash_config:
+  filebeat_data:
+  metricbeat_data:
+  heartbeat_data:
+  prometheus_data:
+
+secrets:
+  elastic_password:
+    file: ./secrets/elastic_password.txt
+  logstash_keystore_password:
+    file: ./secrets/logstash_keystore_password.txt
+  elastic_ca_crt:
+    file: ./secrets/elastic_ca.crt

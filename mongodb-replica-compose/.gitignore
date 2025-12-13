@@ -1,0 +1,11 @@
+# Secrets / local overrides
+.env.local
+secrets/*.txt
+
+# Grafana local state if bind-mounted
+monitoring/grafana/data/
+
+# OS/IDE
+.DS_Store
+.idea/
+.vscode/

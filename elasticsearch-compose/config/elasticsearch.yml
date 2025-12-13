@@ -1,0 +1,10 @@
+# Keep elasticsearch.yml focused; most is in compose env to make overrides obvious.
+
+# Networking
+network.host: 0.0.0.0
+http.port: 9200
+
+# Avoid accidental disk watermark surprises in small disks; tune to your reality
+cluster.routing.allocation.disk.threshold_enabled: true
+
+# Logging defaults are fine; change only if you have a logging standard

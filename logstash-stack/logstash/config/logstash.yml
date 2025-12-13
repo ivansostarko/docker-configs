@@ -1,0 +1,16 @@
+http.host: "0.0.0.0"
+http.port: 9600
+
+# Persistent queue to survive spikes / downstream outages
+queue.type: persisted
+queue.max_bytes: 2gb
+
+# Dead letter queue for mapping errors, etc.
+dead_letter_queue.enable: true
+
+# Safer defaults
+pipeline.ordered: auto
+pipeline.ecs_compatibility: v8
+
+# Reduce noisy logs; adjust via env LOG_LEVEL if needed
+log.level: ${LOG_LEVEL:info}
