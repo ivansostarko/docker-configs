@@ -8,6 +8,11 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 ### Apps
 - [Wordpress](/wordpress/README.md)
 
+### Web servers
+- [Apache](/apache/README.md)
+- [Nginx](/nginx/README.md)
+
+
 ### Databases
 - [MySql](/mysql/README.md)
 - [Postgres](/postgres/README.md)
@@ -15,19 +20,34 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [MongoDB](/mongodb/README.md)
 - [Redis](/redis/README.md)
 
-### Monitoring
-- [Prometheus](/prometheus/README.md)
+### Status Page
+- [CachetHq](/cachethq/README.md)
+
+
+### Admin Tools
 - [Portainer](/portainer/README.md)
 - [PhpMyAdmin](/phpmyadmin/README.md)
 - [Adminer](/adminer/README.md)
+- Kafka Admin
+- Redis Admin
+- Postgres Admin
+- RabbitMq Admin
+
+
+### Collaboration Tools
 - [Mattermost](/mattermost/README.md)
-- [Grafana](/grafana/README.md)
+
+### Error Management
 - [Glitchtip](/glitchtip/README.md)
-- [CachetHq](/cachethq/README.md)
+
+
+### Monitoring
+- [Prometheus](/prometheus/README.md)
+- [Grafana](/grafana/README.md)
 - [Alert Manager](/alert-manager/README.md)
 
 
-### Networks
+### Networks and VPN
 - [CoreDNS](/coredns/README.md)
 
 ### Email
@@ -37,6 +57,8 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 ### AI
 - [Ollama](/ollama/README.md)
 - [Open AI Web](/open-ai-web/README.md)
+
+### Automation Tools
 - [N8N](/n8n/README.md)
 
 ### Storage
@@ -46,13 +68,27 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [Infisical](/infisical/README.md)
 
 ### Metrics / Prometheus Exporters
-- [Coturn Exporter](/prometheus-exporters/coturn_exporter/README.md)
-- [MySql Exporter](/prometheus-exporters/mysqld_exporter/README.md)
+- [Coturn Exporter](/prometheus-exporters/coturn-exporter/README.md)
+- [MySql Exporter](/prometheus-exporters/mysqld-exporter/README.md)
 - [Node Exporter](/prometheus-exporters/node-exporter/README.md)
 - [Ollama Exporter](/prometheus-exporters/ollama-exporter/README.md)
-- [Postgres Exporter](/prometheus-exporters/postgres_exporter/README.md)
+- [Postgres Exporter](/prometheus-exporters/postgres-exporter/README.md)
 - [Wireguard Exporter](/prometheus-exporters/wireguard-exporter/README.md)
 - [Cloudflare Exporter](/prometheus-exporters/wireguard-exporter/README.md)
+- [Gluster Exporter](/prometheus-exporters/gluster-exporter/README.md)
+- [Elasticsearch Exporter](/prometheus-exporters/elasticsearch-exporter/README.md)
+- [Cloudflare Exporter](/prometheus-exporters/cloudflare-exporter/README.md)
+- [Redis Exporter](/prometheus-exporters/redis-exporter/README.md)
+- [Rabbitmq Exporter](/prometheus-exporters/rabbitmq-exporter/README.md)
+- [Nginx Exporter](/prometheus-exporters/nginx-exporter/README.md)
+- [Mysqld Exporter](/prometheus-exporters/mysqld-exporter/README.md)
+- [MongoDB Exporter](/prometheus-exporters/mongodb-exporter/README.md)
+- [Logstash Exporter](/prometheus-exporters/logstash-exporter/README.md)
+- [Kibana Exporter](/prometheus-exporters/kibana-exporter/README.md)
+- [Kafka Exporter](/prometheus-exporters/kafka-exporter/README.md)
+- [Certbot Exporter](/prometheus-exporters/certbot-exporter/README.md)
+- [Apache Exporter](/prometheus-exporters/apache-exporter/README.md)
+
 
 ## Prerequisites
 
