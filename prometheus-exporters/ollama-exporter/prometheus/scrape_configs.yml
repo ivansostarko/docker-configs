@@ -1,0 +1,6 @@
+# Prometheus scrape_configs snippet
+scrape_configs:
+  - job_name: "ollama_exporter"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["ollama_exporter:8000"]

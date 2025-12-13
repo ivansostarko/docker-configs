@@ -1,0 +1,71 @@
+version: "3.9"
+
+services:
+  wireguard-exporter:
+    image: mindflavor/prometheus-wireguard-exporter:latest
+    container_name: wireguard-exporter
+    restart: unless-stopped
+
+    # WireGuard interfaces live in the host network namespace.
+    # If you remove this, you will likely export "nothing useful".
+    network_mode: host
+
+    # Centralize tunables in .env
+    env_file:
+      - .env
+    environment:
+      # Keep these explicit so the container doesn't rely on image defaults you didn't review.
+      WG_EXPORTER_WG_ENDPOINT: ${WG_EXPORTER_WG_ENDPOINT:-/usr/bin/wg}
+      WG_EXPORTER_PORT: ${WG_EXPORTER_PORT:-9586}
+
+    # Minimal host access required
+    volumes:
+      # The exporter uses wg to query stats; bind-mount the host binary to match the endpoint path.
+      - /usr/bin/wg:${WG_EXPORTER_WG_ENDPOINT:-/usr/bin/wg}:ro
+      # WireGuard config/state (keys in here are sensitive; keep this read-only)
+      - /etc/wireguard:/etc/wireguard:ro
+
+      # Optional: some setups expose runtime info here; harmless if absent.
+      # - /var/run/wireguard:/var/run/wireguard:ro
+
+    # Security hardening (host networking already reduces isolation; mitigate what you can)
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+
+    # Capability: wg queries can require netlink access; NET_ADMIN is the usual minimum.
+    # If it works without, remove it (least privilege).
+    cap_add:
+      - NET_ADMIN
+
+    # Basic liveness check against the metrics endpoint
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${WG_EXPORTER_PORT:-9586}/metrics >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    # Prometheus autodiscovery (useful if you have tooling that reads labels)
+    labels:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "${WG_EXPORTER_PORT:-9586}"
+      prometheus.io/path: "/metrics"
+
+    # Operational hygiene
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Optional (effective only in Swarm mode). Keep if you use it; otherwise delete.
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+        reservations:
+          memory: 32M

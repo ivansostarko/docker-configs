@@ -1,0 +1,6 @@
+# Template for coturn_exporter config.
+# The secret is injected at runtime from Docker secrets via envsubst.
+ip: ${COTURN_IP}
+port: ${COTURN_PORT}
+secret: ${COTURN_STATIC_AUTH_SECRET}
+interval: ${COTURN_EXPORTER_INTERVAL}

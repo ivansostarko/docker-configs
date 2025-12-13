@@ -1,0 +1,77 @@
+services:
+  # =========================
+  # MySQL Exporter (mysqld_exporter)
+  # =========================
+  mysqld_exporter:
+    # Pin a version; avoid :latest for predictable upgrades.
+    image: prom/mysqld-exporter:v0.18.0
+    container_name: mysqld_exporter
+    hostname: mysqld_exporter
+    restart: unless-stopped
+
+    # Prefer a .my.cnf-style config mounted as a Docker secret (keeps creds out of env).
+    secrets:
+      - mysqld_exporter_my_cnf
+      # Optional: protect /metrics with TLS/basic auth via exporter-toolkit web config
+      - mysqld_exporter_web_config
+
+    command:
+      - "--config.my-cnf=/run/secrets/mysqld_exporter_my_cnf"
+      - "--web.listen-address=:9104"
+      # Optional but recommended if you ever expose 9104 beyond an internal network
+      - "--web.config.file=/run/secrets/mysqld_exporter_web_config"
+
+    # If Prometheus is on the same Docker network, you usually do NOT need host port publishing.
+    expose:
+      - "9104"
+    # If you truly need host access, uncomment:
+    # ports:
+    #   - "${WORDPRESS_DB_EXPORTER_PORT:-9104}:9104"
+
+    networks:
+      - asterix_network
+
+    # Operational hardening
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 200
+
+    # Resource bounds (adjust to your environment)
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 32M
+
+    # Healthcheck: verifies the metrics endpoint responds.
+    # NOTE: this assumes wget exists in the image; if it doesn’t, remove this or switch to a sidecar healthcheck.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9104/metrics >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  asterix_network:
+    # If you already created this network elsewhere, keep it external.
+    # Otherwise set external: false (or remove external) and Compose will create it.
+    external: true
+
+secrets:
+  mysqld_exporter_my_cnf:
+    file: ./secrets/mysqld_exporter.my.cnf
+  mysqld_exporter_web_config:
+    file: ./secrets/mysqld_exporter_web.yml

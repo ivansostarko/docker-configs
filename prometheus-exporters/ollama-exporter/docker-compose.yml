@@ -1,0 +1,83 @@
+services:
+  # =========================
+  # Ollama exporter
+  # =========================
+  # Scrapes an existing Ollama server and exposes Prometheus metrics at /metrics
+  # Image: lucabecker42/ollama-exporter
+  ollama_exporter:
+    # Avoid :latest in production. Pin a tag or digest.
+    image: lucabecker42/ollama-exporter:1.0.1
+    container_name: ollama_exporter
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      # Exporter listen port
+      PORT: ${OLLAMA_EXPORTER_PORT:-8000}
+
+      # Polling interval (seconds)
+      INTERVAL: ${OLLAMA_EXPORTER_INTERVAL:-30}
+
+      # API timeout (seconds)
+      API_TIMEOUT: ${OLLAMA_EXPORTER_API_TIMEOUT:-30}
+
+      # Where Ollama is reachable *from this container* (format: host:port)
+      OLLAMA_HOST: ${OLLAMA_HOST:-ollama:11434}
+
+    # If Ollama runs on the Docker host and you want to target it as host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    networks:
+      - monitoring
+
+    # Prefer internal-only exposure when Prometheus is on the same Docker network.
+    expose:
+      - "${OLLAMA_EXPORTER_PORT:-8000}"
+
+    # Publish to host only if you truly need host access.
+    # Default binds to localhost for safety.
+    ports:
+      - "${OLLAMA_EXPORTER_BIND:-127.0.0.1}:${OLLAMA_EXPORTER_PORT:-8000}:${OLLAMA_EXPORTER_PORT:-8000}"
+
+    # Healthcheck without curl/wget (image is Node-based)
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"const p=process.env.PORT||8000;require('http').get('http://127.0.0.1:'+p+'/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1));\""
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+    # Basic hardening defaults
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    stop_grace_period: 10s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    labels:
+      - "prometheus.scrape=true"
+      - "prometheus.path=/metrics"
+      - "prometheus.port=${OLLAMA_EXPORTER_PORT:-8000}"
+
+networks:
+  monitoring:
+    name: monitoring
+    driver: bridge
+    attachable: true
