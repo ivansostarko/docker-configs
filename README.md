@@ -11,6 +11,7 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 ### Web servers
 - [Apache](/apache/README.md)
 - [Nginx](/nginx/README.md)
+- [Nginx Proxy](/nginx-proxy/README.md)
 
 
 ### Databases
@@ -63,6 +64,11 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 
 ### Storage
 - [Minio](/minio/README.md)
+
+### queue
+- [Kafka](/kafka/README.md)
+- [Beanstalkd](/beanstalkd/README.md)
+- [RabbitMq](/rabbitmq/README.md)
 
 ### Security
 - [Infisical](/infisical/README.md)

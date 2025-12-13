@@ -1,0 +1,139 @@
+services:
+  # =========================
+  # Postgres backup runner (pg_dump)
+  # =========================
+  pg_backup:
+    build:
+      context: ./backup
+    image: local/pg-backup:1.0
+    container_name: pg_backup
+    restart: unless-stopped
+
+    # Keep secrets out of .env and out of `docker inspect`
+    secrets:
+      - pg_host
+      - pg_port
+      - pg_user
+      - pg_password
+      - pg_databases
+
+    environment:
+      # Schedule (supercronic cron format)
+      BACKUP_SCHEDULE: ${BACKUP_SCHEDULE:-"0 2 * * *"}
+
+      # Retention
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      BACKUP_KEEP_MIN_COUNT: ${BACKUP_KEEP_MIN_COUNT:-14}
+
+      # Output format: custom|plain
+      BACKUP_FORMAT: ${BACKUP_FORMAT:-custom}
+
+      # Extra pg_dump args (example: "--no-owner --no-acl")
+      PG_DUMP_EXTRA_ARGS: ${PG_DUMP_EXTRA_ARGS:-""}
+
+      # TLS/SSL: disable|allow|prefer|require|verify-ca|verify-full
+      PGSSLMODE: ${PGSSLMODE:-prefer}
+
+      # Health policy: backup must have succeeded within N seconds
+      MAX_BACKUP_AGE_SECONDS: ${MAX_BACKUP_AGE_SECONDS:-93600} # 26h
+
+      # Metrics via Pushgateway (optional)
+      PUSHGATEWAY_URL: ${PUSHGATEWAY_URL:-http://pushgateway:9091}
+      METRICS_JOB: ${METRICS_JOB:-pg_backup}
+      METRICS_INSTANCE: ${METRICS_INSTANCE:-pg_backup_1}
+
+      TZ: ${TZ:-Europe/Zagreb}
+
+    volumes:
+      # Durable backups on the host (or mount a NAS path)
+      - type: bind
+        source: ./data/backups
+        target: /backups
+
+      # Small state dir (last success timestamps, etc.)
+      - type: bind
+        source: ./data/state
+        target: /state
+
+    networks:
+      - db
+      - monitoring
+
+    # Hardening (adjust if your environment needs more permissions)
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/local/bin/healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+    logging: &default_logging
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # =========================
+  # Prometheus Pushgateway (backup job metrics endpoint)
+  # =========================
+  pushgateway:
+    image: prom/pushgateway:v1.9.0
+    container_name: pushgateway
+    restart: unless-stopped
+    networks:
+      - monitoring
+    ports:
+      - "${PUSHGATEWAY_PORT:-9091}:9091"
+    logging: *default_logging
+
+  # =========================
+  # Prometheus (optional; included to make metrics usable immediately)
+  # =========================
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: prometheus
+    restart: unless-stopped
+    networks:
+      - monitoring
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - type: bind
+        source: ./monitoring/prometheus.yml
+        target: /etc/prometheus/prometheus.yml
+        read_only: true
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    logging: *default_logging
+
+networks:
+  db:
+    name: ${DB_NETWORK_NAME:-db_net}
+    internal: true
+  monitoring:
+    name: ${MONITORING_NETWORK_NAME:-monitoring_net}
+
+volumes:
+  prometheus_data:
+
+secrets:
+  pg_host:
+    file: ./secrets/pg_host.txt
+  pg_port:
+    file: ./secrets/pg_port.txt
+  pg_user:
+    file: ./secrets/pg_user.txt
+  pg_password:
+    file: ./secrets/pg_password.txt
+  pg_databases:
+    file: ./secrets/pg_databases.txt
