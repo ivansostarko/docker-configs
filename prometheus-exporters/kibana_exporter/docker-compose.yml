@@ -1,0 +1,63 @@
+version: "3.9"
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  kibana_exporter:
+    # Wrapper image to support Docker secrets + curl-based healthcheck.
+    build:
+      context: ./image
+      args:
+        EXPORTER_UPSTREAM_IMAGE: "chamilad/kibana-prometheus-exporter:${KIBANA_EXPORTER_UPSTREAM_TAG}"
+    image: local/kibana-prometheus-exporter:${KIBANA_EXPORTER_UPSTREAM_TAG}
+    container_name: kibana_exporter
+    restart: unless-stopped
+    init: true
+
+    env_file:
+      - .env
+
+    secrets:
+      - kibana_password
+
+    networks:
+      - monitoring
+
+    ports:
+      - "${KIBANA_EXPORTER_PORT}:9684"
+
+    # Hardening
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9684/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+    logging: *default-logging
+
+    labels:
+      prometheus.scrape: "true"
+      prometheus.port: "9684"
+      prometheus.path: "/metrics"
+
+networks:
+  monitoring:
+    name: ${MONITORING_NETWORK_NAME}
+    external: true
+
+secrets:
+  kibana_password:
+    file: ./secrets/kibana_password.txt

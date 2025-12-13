@@ -1,0 +1,17 @@
+# Use the pipeline directory we mount in docker-compose.yml
+path.config: /usr/share/logstash/pipeline
+
+# Optional: reduce noisy logs once stable
+log.level: info
+
+# You can secure the Monitoring API, but do NOT do that blindly:
+# Many exporters will stop working if you enable auth/TLS.
+#
+# Example (only if your exporter supports it):
+# api.ssl.enabled: true
+# api.ssl.keystore.path: /usr/share/logstash/config/api-keystore.p12
+# api.ssl.keystore.password: "${LS_API_KEYSTORE_PASS}"
+#
+# api.auth.type: basic
+# api.auth.basic.username: "${LS_API_USER}"
+# api.auth.basic.password: "${LS_API_PASS}"

@@ -1,0 +1,129 @@
+services:
+  # =========================
+  # Certbot (renew loop)
+  # =========================
+  certbot:
+    image: ${CERTBOT_IMAGE:-certbot/certbot:latest}
+    container_name: certbot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      CERTBOT_RENEW_INTERVAL: ${CERTBOT_RENEW_INTERVAL:-12h}
+      TZ: ${TZ:-UTC}
+    volumes:
+      # Persist LE state + issued certs
+      - letsencrypt_etc:/etc/letsencrypt
+      - letsencrypt_lib:/var/lib/letsencrypt
+      - letsencrypt_log:/var/log/letsencrypt
+
+      # If you use HTTP-01 webroot challenges, your reverse proxy must serve this directory:
+      - certbot_webroot:/var/www/certbot
+
+      # Scripts
+      - ./scripts/certbot-renew.sh:/usr/local/bin/certbot-renew.sh:ro
+      - ./scripts/deploy-hook.sh:/usr/local/bin/deploy-hook.sh:ro
+
+    # Optional DNS-01 credentials (example: Cloudflare).
+    # If you don't use DNS plugins, you can remove this secrets section entirely.
+    secrets:
+      - cloudflare_ini
+
+    entrypoint: ["/bin/sh", "/usr/local/bin/certbot-renew.sh"]
+
+    # Minimal hardening (Certbot needs filesystem write access to letsencrypt volumes)
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    networks:
+      - monitoring
+
+    # Healthcheck: "healthy" only once at least one cert exists.
+    # If you're bootstrapping fresh, it will stay "unhealthy" until you issue the first cert.
+    healthcheck:
+      test: ["CMD-SHELL", "test -n \"$(find /etc/letsencrypt/live -maxdepth 3 -name fullchain.pem -print -quit 2>/dev/null)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+  # =========================
+  # Prometheus SSL exporter (reads Certbot cert files)
+  # =========================
+  ssl_exporter:
+    image: ${SSL_EXPORTER_IMAGE:-ribbybibby/ssl-exporter:latest}
+    container_name: ssl_exporter
+    restart: unless-stopped
+    env_file:
+      - .env
+    command:
+      - "--web.listen-address=:${SSL_EXPORTER_PORT_INTERNAL:-9219}"
+      - "--web.metrics-path=/metrics"
+      - "--web.probe-path=/probe"
+      - "--config.file=/etc/ssl_exporter/ssl_exporter.yml"
+      - "--log.level=${SSL_EXPORTER_LOG_LEVEL:-info}"
+    ports:
+      - "${SSL_EXPORTER_PORT:-9219}:${SSL_EXPORTER_PORT_INTERNAL:-9219}"
+    volumes:
+      # Read the same cert volume Certbot writes to
+      - letsencrypt_etc:/etc/letsencrypt:ro
+
+      # Exporter config (modules)
+      - ./config/ssl_exporter/ssl_exporter.yml:/etc/ssl_exporter/ssl_exporter.yml:ro
+
+    # Harden a bit (exporter only needs read-only access)
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    networks:
+      - monitoring
+
+    # Healthcheck: requires wget; if the image changes and wget is absent, swap to curl/nc accordingly.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${SSL_EXPORTER_PORT_INTERNAL:-9219}/metrics >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+networks:
+  monitoring:
+    name: ${MONITORING_NETWORK_NAME:-monitoring}
+    driver: bridge
+    attachable: true
+
+
+volumes:
+  letsencrypt_etc:
+    name: ${LETSENCRYPT_ETC_VOLUME:-letsencrypt_etc}
+  letsencrypt_lib:
+    name: ${LETSENCRYPT_LIB_VOLUME:-letsencrypt_lib}
+  letsencrypt_log:
+    name: ${LETSENCRYPT_LOG_VOLUME:-letsencrypt_log}
+  certbot_webroot:
+    name: ${CERTBOT_WEBROOT_VOLUME:-certbot_webroot}
+
+
+secrets:
+  # Optional (DNS-01 example). If not used, you can remove it.
+  cloudflare_ini:
+    file: ./secrets/cloudflare.ini

@@ -1,0 +1,10 @@
+default_module: certbot_files
+
+modules:
+  - prober: file
+    # This 'target' makes /probe work without passing query params.
+    # It will emit one time-series per matching file with label "file".
+    target: /etc/letsencrypt/live/**/fullchain.pem
+
+    # Optional: prevent long hangs
+    timeout: 5s

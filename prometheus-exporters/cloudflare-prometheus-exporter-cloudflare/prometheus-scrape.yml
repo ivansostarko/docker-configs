@@ -1,0 +1,10 @@
+# Prometheus scrape config snippet
+# Add this under `scrape_configs:` in your prometheus.yml
+
+- job_name: cloudflare_exporter
+  metrics_path: /metrics
+  scrape_interval: 60s
+  scrape_timeout: 20s
+  static_configs:
+    - targets:
+        - cloudflare_exporter:8080

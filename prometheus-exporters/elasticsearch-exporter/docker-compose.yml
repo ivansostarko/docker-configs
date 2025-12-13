@@ -1,0 +1,110 @@
+services:
+  elasticsearch_exporter:
+    image: quay.io/prometheuscommunity/elasticsearch-exporter:${ES_EXPORTER_IMAGE_TAG:-latest}
+    container_name: elasticsearch_exporter
+    restart: unless-stopped
+
+    networks:
+      - monitoring
+
+    # Bind to localhost by default to avoid exposing metrics publicly.
+    # If Prometheus is on another host, change to "0.0.0.0:${ELASTICSEARCH_EXPORTER_PORT}:9114"
+    ports:
+      - "127.0.0.1:${ELASTICSEARCH_EXPORTER_PORT:-9114}:9114"
+
+    command:
+      - "--web.listen-address=:9114"
+      - "--web.telemetry-path=/metrics"
+      # Optional: protect the exporter endpoint with exporter-toolkit style config
+      - "--web.config.file=/etc/elasticsearch_exporter/web.yml"
+
+      # Elasticsearch target (single-target mode)
+      - "--es.uri=${ES_URI}"
+
+      # Collection knobs (be conservative; indices/shards/snapshots can be heavy)
+      - "--es.timeout=${ES_TIMEOUT:-10s}"
+      - "--es.all=${ES_ALL:-false}"
+      - "--es.indices=${ES_INDICES:-false}"
+      - "--es.shards=${ES_SHARDS:-false}"
+      - "--es.indices_settings=${ES_INDICES_SETTINGS:-false}"
+      - "--es.indices_mappings=${ES_INDICES_MAPPINGS:-false}"
+      - "--collector.clustersettings=${ES_CLUSTERSETTINGS:-false}"
+      - "--collector.snapshots=${ES_SNAPSHOTS:-false}"
+      - "--collector.health-report=${ES_HEALTH_REPORT:-false}"
+      - "--es.ilm=${ES_ILM:-false}"
+      - "--es.data_stream=${ES_DATA_STREAM:-false}"
+
+      # TLS to Elasticsearch (optional). Mount files if used.
+      - "--es.ca=/etc/elasticsearch_exporter/tls/es-ca.pem"
+      - "--es.client-cert=/etc/elasticsearch_exporter/tls/es-client.crt"
+      - "--es.client-private-key=/etc/elasticsearch_exporter/tls/es-client.key"
+      - "--es.ssl-skip-verify=${ES_SSL_SKIP_VERIFY:-false}"
+
+      # Logging
+      - "--log.level=${ES_EXPORTER_LOG_LEVEL:-info}"
+      - "--log.format=${ES_EXPORTER_LOG_FORMAT:-logfmt}"
+
+    # Wrapper to read secrets from /run/secrets and set ES_USERNAME/ES_PASSWORD/ES_API_KEY
+    entrypoint: ["/bin/sh", "/etc/elasticsearch_exporter/entrypoint.sh"]
+
+    secrets:
+      - es_username
+      - es_password
+      - es_api_key
+      - exporter_basic_auth_user
+      - exporter_basic_auth_pass
+
+    environment:
+      ES_USERNAME_FILE: /run/secrets/es_username
+      ES_PASSWORD_FILE: /run/secrets/es_password
+      ES_API_KEY_FILE: /run/secrets/es_api_key
+
+      EXPORTER_BASIC_AUTH_USER_FILE: /run/secrets/exporter_basic_auth_user
+      EXPORTER_BASIC_AUTH_PASS_FILE: /run/secrets/exporter_basic_auth_pass
+
+    volumes:
+      - ./config/elasticsearch_exporter/entrypoint.sh:/etc/elasticsearch_exporter/entrypoint.sh:ro
+      - ./config/elasticsearch_exporter/web.yml:/etc/elasticsearch_exporter/web.yml:ro
+      - ./config/elasticsearch_exporter/tls:/etc/elasticsearch_exporter/tls:ro
+
+    # Basic hardening
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /run:rw,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    # Healthcheck: verifies exporter is responding.
+    # If the image lacks wget/curl, replace this with a sidecar check or remove.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9114/metrics >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  monitoring:
+    name: ${MONITORING_NETWORK:-monitoring}
+    external: ${MONITORING_NETWORK_EXTERNAL:-true}
+
+secrets:
+  es_username:
+    file: ./secrets/es_username.txt
+  es_password:
+    file: ./secrets/es_password.txt
+  es_api_key:
+    file: ./secrets/es_api_key.txt
+  exporter_basic_auth_user:
+    file: ./secrets/exporter_basic_auth_user.txt
+  exporter_basic_auth_pass:
+    file: ./secrets/exporter_basic_auth_pass.txt

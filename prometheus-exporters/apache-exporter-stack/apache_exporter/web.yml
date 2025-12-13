@@ -1,0 +1,9 @@
+# This file is consumed by --web.config.file (exporter-toolkit style).
+# If you don't want to protect /metrics, you may leave this empty or remove the flag in docker-compose.yml.
+#
+# Example basic auth (bcrypt hash). Generate:
+#   htpasswd -nBC 10 "" | tr -d ':
+'
+#
+basic_auth_users:
+  prometheus: "$2y$10$REPLACE_WITH_BCRYPT_HASH................................"

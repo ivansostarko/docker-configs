@@ -1,0 +1,77 @@
+version: "3.9"
+
+name: mongodb-exporter
+
+services:
+  mongodb_exporter:
+    # Percona MongoDB Exporter (Prometheus)
+    # Exposes metrics at: http://<host>:${MONGODB_EXPORTER_PORT}/metrics
+    image: percona/mongodb_exporter:0.40
+    container_name: mongodb_exporter
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    # Secrets are mounted as files (Compose). Keep credentials out of compose/.env.
+    secrets:
+      - mongodb_uri
+      - mongodb_user
+      - mongodb_password
+
+    # Read secrets at runtime and start exporter.
+    # IMPORTANT: mongodb_uri should NOT include credentials. Provide creds via MONGODB_USER / MONGODB_PASSWORD.
+    entrypoint: ["/bin/sh", "-ec"]
+    command: |
+      export MONGODB_URI="$(cat /run/secrets/mongodb_uri)";
+      export MONGODB_USER="$(cat /run/secrets/mongodb_user)";
+      export MONGODB_PASSWORD="$(cat /run/secrets/mongodb_password)";
+      exec mongodb_exporter --mongodb.uri="$MONGODB_URI" ${MONGODB_EXPORTER_EXTRA_ARGS:-}
+
+    ports:
+      - "${MONGODB_EXPORTER_PORT:-9216}:9216"
+
+    networks:
+      - monitoring
+
+    # Hardening
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    # Liveness check. If the image does not include wget, remove this block or replace with curl.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9216/metrics | grep -q '^mongodb_up'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    labels:
+      - "prometheus.scrape=true"
+      - "prometheus.port=9216"
+      - "prometheus.path=/metrics"
+
+networks:
+  monitoring:
+    name: monitoring
+    driver: bridge
+    attachable: true
+
+secrets:
+  mongodb_uri:
+    file: ./secrets/mongodb_uri.txt
+  mongodb_user:
+    file: ./secrets/mongodb_user.txt
+  mongodb_password:
+    file: ./secrets/mongodb_password.txt

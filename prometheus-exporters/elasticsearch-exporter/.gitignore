@@ -1,0 +1,9 @@
+# Secrets
+secrets/*.txt
+
+# TLS material (adjust to your policy)
+config/elasticsearch_exporter/tls/*
+!config/elasticsearch_exporter/tls/.keep
+
+# Local overrides
+.env.local

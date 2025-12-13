@@ -1,0 +1,64 @@
+services:
+  kafka_exporter:
+    build:
+      context: ./kafka_exporter
+    image: local/kafka-exporter:1.9.0
+    container_name: kafka_exporter
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    # Use Docker secrets for sensitive values (e.g., SASL password, TLS key)
+    secrets:
+      - kafka_sasl_password
+
+    volumes:
+      # TLS materials (optional; mount if you enable TLS flags)
+      - ./kafka_exporter/certs:/etc/kafka-exporter/certs:ro
+
+    ports:
+      - "${KAFKA_EXPORTER_PORT:-9308}:9308"
+
+    networks:
+      - monitoring
+      - kafka
+
+    # Healthcheck is real (curl exists because our wrapper image installs it)
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9308/metrics >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+    # Hardening
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+secrets:
+  kafka_sasl_password:
+    file: ./secrets/kafka_sasl_password.txt
+
+networks:
+  monitoring:
+    name: ${MONITORING_NETWORK_NAME:-monitoring}
+    driver: bridge
+
+  # Best practice: attach the exporter to the same Docker network as Kafka.
+  # If Kafka is in another Compose project, create/use a shared external network:
+  #   docker network create kafka
+  kafka:
+    name: ${KAFKA_NETWORK_NAME:-kafka}
+    external: true

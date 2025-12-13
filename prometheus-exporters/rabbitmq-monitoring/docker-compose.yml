@@ -1,0 +1,130 @@
+version: "3.9"
+
+name: rabbitmq-monitoring
+
+networks:
+  apps:
+    driver: bridge
+  monitoring:
+    driver: bridge
+
+volumes:
+  rabbitmq_data:
+
+secrets:
+  rabbitmq_default_user:
+    file: ./secrets/rabbitmq_default_user.txt
+  rabbitmq_default_pass:
+    file: ./secrets/rabbitmq_default_pass.txt
+
+services:
+  # ==========================================================
+  # RabbitMQ (with built-in Prometheus metrics via plugin)
+  # Metrics endpoint: http://rabbitmq:15692/metrics
+  # ==========================================================
+  rabbitmq:
+    image: ${RABBITMQ_IMAGE:-rabbitmq:4-management}
+    container_name: rabbitmq
+    hostname: rabbitmq
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    # Use Docker secrets for initial credentials.
+    # NOTE: *_FILE support depends on the image/entrypoint implementation.
+    # If your image/tag doesn't honor *_FILE, set RABBITMQ_DEFAULT_USER/PASS directly in .env (less secure).
+    environment:
+      RABBITMQ_NODENAME: rabbit@rabbitmq
+      RABBITMQ_DEFAULT_USER_FILE: /run/secrets/rabbitmq_default_user
+      RABBITMQ_DEFAULT_PASS_FILE: /run/secrets/rabbitmq_default_pass
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_DEFAULT_VHOST:-/}
+
+    secrets:
+      - rabbitmq_default_user
+      - rabbitmq_default_pass
+
+    # Ports:
+    # - 5672 AMQP for apps
+    # - 15672 Management UI/API
+    # - 15692 Prometheus metrics (rabbitmq_prometheus plugin)
+    #
+    # Production note: do NOT publish 15672/15692 to the Internet. Prefer internal networks / firewall / reverse proxy.
+    ports:
+      - "${RABBITMQ_AMQP_PORT:-5672}:5672"
+      - "${RABBITMQ_MGMT_PORT:-15672}:15672"
+      - "${RABBITMQ_METRICS_PORT:-15692}:15692"
+
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./config/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./config/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+
+    networks:
+      - apps
+      - monitoring
+
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping && rabbitmq-diagnostics -q check_running"]
+      interval: 30s
+      timeout: 10s
+      retries: 6
+      start_period: 30s
+
+    # RabbitMQ can consume lots of file descriptors under load.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ==========================================================
+  # Legacy exporter (RabbitMQ 3 ONLY) — optional via profile
+  # Exposes: http://rabbitmq_exporter:9419/metrics
+  #
+  # WARNING: This exporter is EOL and explicitly "only works with RabbitMQ 3".
+  # Use the built-in plugin for RabbitMQ 4+.
+  # ==========================================================
+  rabbitmq_exporter:
+    image: kbudde/rabbitmq-exporter:latest
+    container_name: rabbitmq_exporter
+    profiles: ["legacy-rabbitmq3"]
+    restart: unless-stopped
+
+    environment:
+      RABBIT_URL: "http://rabbitmq:15672"
+      RABBIT_USER_FILE: /run/secrets/rabbitmq_default_user
+      RABBIT_PASSWORD_FILE: /run/secrets/rabbitmq_default_pass
+      PUBLISH_PORT: "9419"
+      LOG_LEVEL: ${RABBITMQ_EXPORTER_LOG_LEVEL:-info}
+
+    secrets:
+      - rabbitmq_default_user
+      - rabbitmq_default_pass
+
+    ports:
+      - "${RABBITMQ_EXPORTER_PORT:-9419}:9419"
+
+    networks:
+      - monitoring
+
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9419/metrics | grep -q '^#'"]
+      interval: 30s
+      timeout: 5s
+      retries: 6
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

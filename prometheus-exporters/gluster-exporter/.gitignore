@@ -1,0 +1,5 @@
+# Secrets should never be committed
+secrets/gluster_exporter_htpasswd
+
+# Local build artifacts
+*.log

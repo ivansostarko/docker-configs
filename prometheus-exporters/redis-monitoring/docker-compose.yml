@@ -1,0 +1,134 @@
+services:
+  # =========================
+  # Redis
+  # =========================
+  redis:
+    image: ${REDIS_IMAGE:-redis:7-alpine}
+    container_name: ${REDIS_CONTAINER_NAME:-redis}
+    restart: unless-stopped
+    hostname: redis
+
+    # Load base config from file; inject password from Docker secret at runtime.
+    # This avoids hardcoding secrets in the config file.
+    command:
+      - sh
+      - -ec
+      - |
+        exec redis-server /usr/local/etc/redis/redis.conf \
+          --requirepass "$$(cat /run/secrets/redis_password)"
+
+    volumes:
+      - redis_data:/data
+      - ./config/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+
+    secrets:
+      - redis_password
+
+    networks:
+      app_net:
+        aliases: [ "redis" ]
+
+    # Only publish Redis to host if you absolutely must.
+    # If apps run on the same Docker network, keep it internal and remove ports.
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$(cat /run/secrets/redis_password)\" PING | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Basic hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # =========================
+  # Prometheus Redis Exporter
+  # =========================
+  redis_exporter:
+    image: ${REDIS_EXPORTER_IMAGE:-oliver006/redis_exporter:v1.80.1}
+    container_name: ${REDIS_EXPORTER_CONTAINER_NAME:-redis_exporter}
+    restart: unless-stopped
+    hostname: redis-exporter
+
+    # Scrape one Redis (simple mode):
+    # - /metrics exposes metrics for the single configured addr
+    command:
+      - "--web.listen-address=:9121"
+      - "--redis.addr=redis://redis:6379"
+      - "--redis.password-file=/run/secrets/redis_password"
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    secrets:
+      - redis_password
+
+    networks:
+      - app_net        # must reach Redis
+      - monitoring     # Prometheus reaches exporter
+
+    ports:
+      - "${REDIS_EXPORTER_PORT:-9121}:9121"
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9121/metrics | grep -q '^redis_up'"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Stronger hardening for exporter
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+# =========================
+# Networks
+# =========================
+networks:
+  # Internal app network (Redis + apps + exporter access)
+  app_net:
+    name: ${APP_NETWORK_NAME:-app_net}
+    driver: bridge
+    internal: true
+
+  # Monitoring network (Prometheus/Grafana live here)
+  monitoring:
+    name: ${MONITORING_NETWORK_NAME:-monitoring}
+    driver: bridge
+
+# =========================
+# Volumes
+# =========================
+volumes:
+  redis_data:
+    name: ${REDIS_DATA_VOLUME:-redis_data}
+
+# =========================
+# Secrets
+# =========================
+secrets:
+  redis_password:
+    file: ./secrets/redis_password.txt

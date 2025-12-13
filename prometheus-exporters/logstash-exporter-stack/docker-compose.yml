@@ -1,0 +1,119 @@
+services:
+  # =========================
+  # Logstash (example target)
+  # =========================
+  logstash:
+    image: docker.elastic.co/logstash/logstash:${LOGSTASH_VERSION}
+    container_name: logstash
+    restart: unless-stopped
+    environment:
+      # Keep heap explicit; stop “it worked in dev” memory roulette
+      LS_JAVA_OPTS: "-Xms${LOGSTASH_HEAP} -Xmx${LOGSTASH_HEAP}"
+      TZ: ${TZ}
+
+    # IMPORTANT:
+    # Logstash Monitoring API defaults to binding on 127.0.0.1 and port range 9600-9700.
+    # We bind it to 0.0.0.0 so the exporter container can reach it on the Docker network.
+    command: >
+      bash -lc '
+        /usr/share/logstash/bin/logstash
+        --path.settings /usr/share/logstash/config
+        --api.http.host 0.0.0.0
+        --api.http.port ${LOGSTASH_API_PORT}
+      '
+
+    volumes:
+      # Settings (includes logstash.yml)
+      - ./logstash/config:/usr/share/logstash/config:ro
+      # Pipelines
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
+      # Persistent data (queue, dead letter queue if enabled, etc.)
+      - logstash_data:/usr/share/logstash/data
+
+    # Publish only what you need.
+    # - 5044 example Beats input (optional)
+    # - DO NOT publish 9600 unless you *really* know why.
+    ports:
+      - "${LOGSTASH_BEATS_PORT}:5044"
+
+    networks:
+      - monitoring
+
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    healthcheck:
+      # Uses the Logstash Monitoring API root endpoint (fast + minimal).
+      test: ["CMD-SHELL", "curl -fsS http://localhost:${LOGSTASH_API_PORT}/ >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+  # ======================================
+  # Prometheus Exporter for Logstash (API)
+  # ======================================
+  logstash_exporter:
+    image: wing924/logstash-exporter:${LOGSTASH_EXPORTER_TAG}
+    container_name: logstash_exporter
+    restart: unless-stopped
+
+    command:
+      - "--web.listen-address=:${LOGSTASH_EXPORTER_PORT}"
+      - "--web.telemetry-path=/metrics"
+      - "--logstash.scrape-uri=${LOGSTASH_SCRAPE_URI}"
+      - "--logstash.timeout=${LOGSTASH_SCRAPE_TIMEOUT}"
+
+    environment:
+      TZ: ${TZ}
+
+    # Only publish exporter metrics (safe/expected).
+    ports:
+      - "${LOGSTASH_EXPORTER_PORT}:9649"
+
+    networks:
+      - monitoring
+
+    depends_on:
+      logstash:
+        condition: service_healthy
+
+    # Tighten container security (exporter is read-only, no reason to be privileged)
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    healthcheck:
+      # Confirm exporter is serving Prometheus text format
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${LOGSTASH_EXPORTER_PORT}/metrics | grep -q '^logstash_up'"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+networks:
+  monitoring:
+    name: ${MONITORING_NETWORK}
+    driver: bridge
+
+volumes:
+  logstash_data:
+    name: ${LOGSTASH_DATA_VOLUME}

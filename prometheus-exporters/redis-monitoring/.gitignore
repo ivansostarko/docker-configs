@@ -1,0 +1,11 @@
+# Secrets
+secrets/*.txt
+!.env.example
+
+# Local env
+.env
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

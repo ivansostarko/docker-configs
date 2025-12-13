@@ -1,0 +1,5 @@
+# Secrets - do not commit real credentials
+secrets/*.txt
+
+# Local overrides
+.env.local

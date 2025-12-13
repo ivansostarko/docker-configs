@@ -1,0 +1,6 @@
+scrape_configs:
+  - job_name: "logstash_exporter"
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - "logstash_exporter:9649"

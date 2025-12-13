@@ -1,0 +1,70 @@
+version: "3.9"
+
+name: monitoring
+
+networks:
+  monitoring:
+    name: monitoring
+    driver: bridge
+
+services:
+  cloudflare_exporter:
+    # Official Cloudflare Prometheus exporter
+    # Repo: https://github.com/lablabs/cloudflare_exporter
+    image: ghcr.io/lablabs/cloudflare_exporter:0.2.3
+    container_name: cloudflare_exporter
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      # Required
+      CF_API_TOKEN: ${CF_API_TOKEN}
+
+      # Optional scoping (comma-separated Zone IDs)
+      CF_ZONES: ${CF_ZONES:-}
+      CF_EXCLUDE_ZONES: ${CF_EXCLUDE_ZONES:-}
+
+      # Exporter server settings
+      LISTEN: ${CF_EXPORTER_LISTEN:-:8080}
+      METRICS_PATH: ${CF_EXPORTER_METRICS_PATH:-/metrics}
+
+      # Exporter tuning (seconds) - adjust for rate limits and scale
+      SCRAPE_INTERVAL: ${CF_EXPORTER_SCRAPE_INTERVAL:-60}
+      SCRAPE_DELAY: ${CF_EXPORTER_SCRAPE_DELAY:-300}
+      CF_TIMEOUT: ${CF_EXPORTER_TIMEOUT:-10s}
+
+      # Misc
+      FREE_TIER: ${CF_EXPORTER_FREE_TIER:-false}
+      LOG_LEVEL: ${CF_EXPORTER_LOG_LEVEL:-error}
+      METRICS_DENYLIST: ${CF_EXPORTER_METRICS_DENYLIST:-}
+      ENABLE_PPROF: "false"
+
+    ports:
+      - "${CF_EXPORTER_PORT:-8080}:8080"
+
+    networks:
+      - monitoring
+
+    # Security hardening (safe defaults)
+    user: "65532:65532"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 200
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # NOTE ON HEALTHCHECK:
+    # The upstream image is commonly distroless and may not include sh/curl/wget.
+    # For a reliable HTTP healthcheck, use docker-compose.secrets.yml (wrapper) which
+    # includes a tiny Alpine runtime with wget and reads token via Docker secrets.

@@ -1,0 +1,116 @@
+name: monitoring-gluster
+
+services:
+  # =========================
+  # Gluster Metrics Exporter (Kadalu)
+  # =========================
+  gluster_metrics_exporter:
+    build:
+      context: ./gluster-metrics-exporter
+      dockerfile: Dockerfile
+    image: local/gluster-metrics-exporter:${GLUSTER_EXPORTER_IMAGE_TAG}
+    container_name: gluster_metrics_exporter
+    restart: unless-stopped
+
+    # IMPORTANT:
+    # Exporter needs to talk to the local Gluster node and read glusterd state.
+    # host networking is the least-bad option for reliability.
+    network_mode: host
+
+    env_file:
+      - .env
+
+    # Bind to localhost by default; expose externally via the nginx proxy (below).
+    command:
+      - --host-binding=${GLUSTER_EXPORTER_BIND}
+      - --port=${GLUSTER_EXPORTER_PORT}
+      - --metrics-path=${GLUSTER_EXPORTER_METRICS_PATH}
+      - --cluster=${GLUSTER_CLUSTER_NAME}
+      - --log-level=${GLUSTER_EXPORTER_LOG_LEVEL}
+      - --log-dir=/var/log/gluster-metrics
+      - --log-file=exporter.log
+      - --glusterd-dir=/var/lib/glusterd
+      - --gluster-cli-path=/usr/sbin/gluster
+      # Optional hardening knobs (uncomment as needed):
+      # - --disable-all
+      # - --enable=peer,volume,brick
+      # - --disable-volumes=vol_to_skip_1,vol_to_skip_2
+
+    volumes:
+      # Read-only host mounts: exporter must see gluster metadata/state
+      - /var/lib/glusterd:/var/lib/glusterd:ro
+      - /etc/glusterfs:/etc/glusterfs:ro
+      - /run/gluster:/run/gluster:ro
+      # Writable logs (keep container rootfs read-only)
+      - gluster_exporter_logs:/var/log/gluster-metrics
+
+    read_only: true
+    tmpfs:
+      - /tmp
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://127.0.0.1:${GLUSTER_EXPORTER_PORT}${GLUSTER_EXPORTER_METRICS_PATH} >/dev/null || exit 1"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # =========================
+  # OPTIONAL: Basic-auth reverse proxy (exposes metrics to Prometheus safely)
+  # =========================
+  gluster_exporter_proxy:
+    image: nginx:1.27-alpine
+    container_name: gluster_exporter_proxy
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      gluster_metrics_exporter:
+        condition: service_healthy
+
+    volumes:
+      - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+
+    secrets:
+      - gluster_exporter_htpasswd
+
+    read_only: true
+    tmpfs:
+      - /tmp
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${GLUSTER_EXPORTER_PROXY_PORT}/healthz >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  gluster_exporter_logs:
+
+secrets:
+  gluster_exporter_htpasswd:
+    file: ./secrets/gluster_exporter_htpasswd

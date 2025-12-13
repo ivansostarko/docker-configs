@@ -1,0 +1,101 @@
+version: "3.9"
+
+name: apache-exporter-stack
+
+services:
+  # =========================
+  # Apache (httpd) with mod_status enabled
+  # =========================
+  apache:
+    build:
+      context: ./apache
+    image: local/httpd-with-status:2.4
+    container_name: apache
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      app:
+      monitoring:
+        ipv4_address: ${APACHE_IP:?set APACHE_IP}
+    ports:
+      # Your real web traffic
+      - "${APACHE_HTTP_PORT:-8080}:80"
+      # If you terminate TLS elsewhere (recommended), skip 443 here.
+      # - "${APACHE_HTTPS_PORT:-8443}:443"
+    volumes:
+      # Demo content; replace with your own site/app mounts
+      - apache_www:/usr/local/apache2/htdocs
+      - apache_logs:/usr/local/apache2/logs
+    healthcheck:
+      # This only validates config. Runtime health is better monitored via metrics.
+      test: ["CMD-SHELL", "httpd -t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - "com.example.service=apache"
+
+  # =========================
+  # Prometheus Apache Exporter
+  # =========================
+  apache_exporter:
+    # Pin a version. Do NOT run observability on :latest if you care about stability.
+    image: quay.io/lusitaniae/apache-exporter:${APACHE_EXPORTER_TAG:-v1.0.11}
+    container_name: apache_exporter
+    restart: unless-stopped
+    depends_on:
+      - apache
+    env_file:
+      - .env
+    networks:
+      monitoring:
+        ipv4_address: ${EXPORTER_IP:?set EXPORTER_IP}
+    ports:
+      - "${APACHE_EXPORTER_PORT:-9117}:9117"
+    command:
+      # Scrape the machine-readable mod_status endpoint.
+      - "--scrape_uri=http://${APACHE_IP}:80/server-status?auto"
+      - "--web.listen-address=:9117"
+      - "--telemetry.endpoint=/metrics"
+      # Optional hardening: protect /metrics with basic auth/TLS (exporter-toolkit style)
+      - "--web.config.file=/etc/apache_exporter/web.yml"
+    volumes:
+      - ./apache_exporter/web.yml:/etc/apache_exporter/web.yml:ro
+    secrets:
+      # optional: used by web.yml if you enable basic auth
+      - exporter_users
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9117/metrics | grep -q '^apache_up'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - "com.example.service=apache_exporter"
+
+networks:
+  app:
+    driver: bridge
+  monitoring:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${MONITORING_SUBNET:-172.20.0.0/24}
+
+volumes:
+  apache_www:
+  apache_logs:
+
+secrets:
+  exporter_users:
+    file: ./secrets/exporter_users.yml

@@ -1,0 +1,9 @@
+# Prometheus scrape config for MongoDB exporter
+# Add this job to your main prometheus.yml (or include it via your preferred method).
+
+- job_name: "mongodb"
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  static_configs:
+    - targets:
+        - "mongodb_exporter:9216"
