@@ -1,0 +1,175 @@
+version: "3.9"
+
+# -----------------------------------------------------------------------------
+# MySQL Backup Stack (mysqldump -> gzip -> retention -> optional Pushgateway metrics)
+#
+# Key goals:
+# - Store MySQL credentials as Docker secrets (no plaintext in compose or env)
+# - Run scheduled dumps to a durable volume
+# - Provide a healthcheck that fails if no recent successful backup exists
+# - Optional metrics via Prometheus Pushgateway (profile: metrics)
+#
+# Notes:
+# - This stack assumes your MySQL server is reachable as MYSQL_HOST:MYSQL_PORT
+#   from the "db" network. If your MySQL runs in a different stack, attach this
+#   service to that network instead, or set MYSQL_HOST to an accessible address.
+# -----------------------------------------------------------------------------
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  mysql_backup:
+    build:
+      context: ./mysql_backup
+    image: local/mysql-backup:1.0
+    container_name: mysql_backup
+    restart: unless-stopped
+
+    # Load non-sensitive defaults from .env (secrets stay in ./secrets/*.txt)
+    env_file:
+      - ./.env
+
+    environment:
+      # General
+      TZ: ${TZ:-Europe/Zagreb}
+
+      # Target MySQL
+      DB_HOST: ${MYSQL_HOST:-mysql}
+      DB_PORT: ${MYSQL_PORT:-3306}
+
+      # Use *_FILE for secrets (these are mounted from Docker secrets below)
+      DB_USER_FILE: /run/secrets/mysql_backup_user
+      DB_PASSWORD_FILE: /run/secrets/mysql_backup_password
+
+      # Databases to dump:
+      # - "all" (default) => --all-databases
+      # - comma-separated list => db1,db2,db3
+      DB_NAMES: ${MYSQL_DATABASES:-all}
+
+      # Scheduling (cron format). Example: "0 3 * * *" for 03:00 daily.
+      BACKUP_SCHEDULE: ${MYSQL_BACKUP_SCHEDULE:-0 3 * * *}
+
+      # Backup behavior
+      BACKUP_DIR: /backups
+      STATE_DIR: /state
+      BACKUP_PREFIX: ${MYSQL_BACKUP_PREFIX:-mysql}
+      BACKUP_COMPRESS: ${MYSQL_BACKUP_COMPRESS:-gzip}  # gzip|none
+      BACKUP_KEEP_LAST: ${MYSQL_BACKUP_KEEP_LAST:-30}  # keep last N files (in addition to retention days)
+      BACKUP_RETENTION_DAYS: ${MYSQL_BACKUP_RETENTION_DAYS:-14}  # delete older than N days
+      BACKUP_NICE: ${MYSQL_BACKUP_NICE:-10}  # lower priority
+      BACKUP_IONICE_CLASS: ${MYSQL_BACKUP_IONICE_CLASS:-2}
+      BACKUP_IONICE_LEVEL: ${MYSQL_BACKUP_IONICE_LEVEL:-7}
+
+      # Optional: extra mysqldump flags (space-separated). Sensible defaults are set in image.
+      BACKUP_EXTRA_DUMP_ARGS: ${MYSQL_BACKUP_EXTRA_DUMP_ARGS:-}
+
+      # Optional: TLS/SSL (mount CA or client certs if needed; see README)
+      MYSQL_SSL_MODE: ${MYSQL_SSL_MODE:-}  # e.g. REQUIRED|VERIFY_CA|VERIFY_IDENTITY
+
+      # Healthcheck: maximum allowed age (seconds) of last success timestamp
+      HEALTH_MAX_AGE_SECONDS: ${MYSQL_BACKUP_HEALTH_MAX_AGE_SECONDS:-90000}
+
+      # Optional metrics via Pushgateway (set empty to disable)
+      PUSHGATEWAY_URL: ${PUSHGATEWAY_URL:-http://pushgateway:9091}
+      METRICS_JOB: ${MYSQL_BACKUP_METRICS_JOB:-mysql_backup}
+      METRICS_INSTANCE: ${MYSQL_BACKUP_METRICS_INSTANCE:-mysql_backup}
+
+      # Initial run on container start (1=yes, 0=no)
+      INIT_BACKUP: ${MYSQL_BACKUP_INIT_BACKUP:-1}
+
+    volumes:
+      - mysql_backup_data:/backups
+      - mysql_backup_state:/state
+
+    # Example: mount additional custom configs (optional)
+    configs:
+      - source: mysql_backup_defaults
+        target: /etc/mysql-backup/backup.defaults.env
+        mode: 0444
+
+    secrets:
+      - mysql_backup_user
+      - mysql_backup_password
+
+    networks:
+      - db
+      - monitoring
+
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/local/bin/healthcheck.sh"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+
+    logging: *default-logging
+
+    # Hardening (pragmatic defaults; adjust if your environment requires more)
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    # Optional: don't expose anything publicly; the backup service doesn't need ports.
+
+    depends_on:
+      pushgateway:
+        condition: service_started
+
+  # ---------------------------------------------------------------------------
+  # Optional metrics target (enable with: docker compose --profile metrics up -d)
+  # ---------------------------------------------------------------------------
+  pushgateway:
+    image: prom/pushgateway:latest
+    container_name: pushgateway
+    restart: unless-stopped
+    profiles: ["metrics"]
+
+    networks:
+      - monitoring
+
+    # Expose only if your Prometheus is outside Docker; otherwise keep internal.
+    ports:
+      - "${PUSHGATEWAY_PORT:-9091}:9091"
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9091/-/healthy >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+    logging: *default-logging
+
+networks:
+  db:
+    name: mysql_backup_db
+    driver: bridge
+    internal: true
+
+  monitoring:
+    name: mysql_backup_monitoring
+    driver: bridge
+    # internal: true  # uncomment if Prometheus also runs inside Docker and joins this network
+
+volumes:
+  mysql_backup_data:
+    name: mysql_backup_data
+    driver: local
+
+  mysql_backup_state:
+    name: mysql_backup_state
+    driver: local
+
+configs:
+  mysql_backup_defaults:
+    file: ./mysql_backup/config/backup.defaults.env
+
+secrets:
+  mysql_backup_user:
+    file: ./secrets/mysql_backup_user.txt
+  mysql_backup_password:
+    file: ./secrets/mysql_backup_password.txt

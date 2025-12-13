@@ -1,0 +1,139 @@
+services:
+  # ============================================================
+  # GlusterFS peer (run exactly ONE instance of this compose per host)
+  # ============================================================
+  gluster:
+    image: ${GLUSTER_IMAGE:-ghcr.io/gluster/gluster-containers:centos}
+    container_name: ${NODE_NAME:-gluster1}
+    hostname: ${NODE_NAME:-gluster1}
+
+    # Gluster community containers often use host networking to avoid
+    # complex port mappings and to improve performance.
+    network_mode: "host"
+
+    # Gluster in containers generally requires privileged access.
+    privileged: true
+    cgroupns_mode: "host"
+
+    environment:
+      TZ: ${TZ:-Europe/Zagreb}
+
+    # Persist config, metadata, and logs on the host.
+    volumes:
+      - ${GLUSTER_ETC_DIR}:/etc/glusterfs:z
+      - ${GLUSTER_LIB_DIR}:/var/lib/glusterd:z
+      - ${GLUSTER_LOG_DIR}:/var/log/glusterfs:z
+
+      # Bricks (ideally real disks/partitions mounted on the host)
+      - ${GLUSTER_BRICKS_DIR}:/bricks:z
+
+      # Required for systemd-in-container style images (common for gluster containers)
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - /dev:/dev
+
+    tmpfs:
+      - /run
+      - /run/lock
+
+    healthcheck:
+      test: ["CMD-SHELL", "gluster --mode=script peer status >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 45s
+
+    restart: unless-stopped
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+  # ============================================================
+  # Bootstrap (run ONLY on the first node, once, to form cluster + create volume)
+  # Usage: docker compose --profile bootstrap up --abort-on-container-exit
+  # ============================================================
+  gluster-bootstrap:
+    profiles: ["bootstrap"]
+    image: ${GLUSTER_IMAGE:-ghcr.io/gluster/gluster-containers:centos}
+    container_name: ${NODE_NAME:-gluster1}-bootstrap
+    network_mode: "host"
+    depends_on:
+      gluster:
+        condition: service_healthy
+    environment:
+      # Cluster peers to probe from THIS node (space-separated)
+      GLUSTER_PEERS: ${GLUSTER_PEERS}
+
+      # Volume settings
+      GLUSTER_VOLUME_NAME: ${GLUSTER_VOLUME_NAME:-gv0}
+      GLUSTER_VOLUME_TYPE: ${GLUSTER_VOLUME_TYPE:-replica}  # replica|disperse|distribute
+      GLUSTER_REPLICA_COUNT: ${GLUSTER_REPLICA_COUNT:-3}
+
+      # Brick endpoints must be reachable:
+      # Example:
+      # 10.0.0.11:/bricks/brick1/gv0 10.0.0.12:/bricks/brick1/gv0 10.0.0.13:/bricks/brick1/gv0
+      GLUSTER_BRICKS: ${GLUSTER_BRICKS}
+
+      # Optional access control (adjust to your network)
+      GLUSTER_AUTH_ALLOW: ${GLUSTER_AUTH_ALLOW:-"10.0.0.0/24"}
+
+    volumes:
+      - ./bootstrap:/bootstrap:ro
+
+    entrypoint: ["/bin/bash", "/bootstrap/bootstrap.sh"]
+    restart: "no"
+
+
+  # ============================================================
+  # Prometheus metrics (Gluster exporter)
+  # Usage: docker compose --profile metrics up -d
+  # ============================================================
+  gluster-exporter:
+    profiles: ["metrics"]
+    build:
+      context: ./metrics/gluster-exporter
+    image: local/gluster-exporter:latest
+    container_name: ${NODE_NAME:-gluster1}-exporter
+    network_mode: "host"
+    depends_on:
+      gluster:
+        condition: service_healthy
+
+    environment:
+      TZ: ${TZ:-Europe/Zagreb}
+
+    volumes:
+      - ./metrics/gluster-exporter/gluster-exporter.toml:/etc/gluster-exporter/gluster-exporter.toml:ro
+      - ${GLUSTER_LIB_DIR}:/var/lib/glusterd:ro
+      - ${GLUSTER_LOG_DIR}:/var/log:rw
+
+    command: ["gluster-exporter", "--config=/etc/gluster-exporter/gluster-exporter.toml"]
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${GLUSTER_EXPORTER_PORT:-9713}/metrics >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+    restart: unless-stopped
+
+
+  # ============================================================
+  # Optional: Node exporter (host metrics)
+  # Usage: docker compose --profile metrics up -d
+  # ============================================================
+  node-exporter:
+    profiles: ["metrics"]
+    image: prom/node-exporter:latest
+    container_name: ${NODE_NAME:-gluster1}-node-exporter
+    network_mode: "host"
+    pid: "host"
+    command:
+      - --path.rootfs=/host
+    volumes:
+      - /:/host:ro,rslave
+    restart: unless-stopped
