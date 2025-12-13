@@ -13,6 +13,7 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 ### Programming languages
 - [PHP](/php/README.md)
 - [PHP Apache](/php-apache/README.md)
+- [PHP Ngnix](/php-nginx/README.md)
 - [NodeJS](/nodejs/README.md)
 
 ### Frameworks
@@ -38,7 +39,7 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [Elasticsearch](/elasticsearch/README.md)
 
 ### Databases Replications
-- [MongoDB Replica](/mongodb-replica/README.md)
+- [MongoDB Replication](/mongodb-replication/README.md)
 - [MySql Replication](/mysql-replication/README.md)
 - [Postgres Replication](/postgres-replication/README.md)
 - [Redis Sentiel](/redis-sentinel/README.md)
@@ -49,8 +50,11 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [Kibana](/kibana/README.md)
 - [Logstash](/logstash/README.md)
 
+### BI
+- [Metabase](/metabase/README.md)
+
 ### Status Page
-- [CachetHq](/cachethq/README.md)
+- [Cachet Hq](/cachethq/README.md)
 
 ### Admin Tools
 - [Portainer](/portainer/README.md)
@@ -101,10 +105,14 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 
 ### VPN
 - [Wireguard](/wireguard/README.md)
-- [Tor](/tor/README.md)
+- [Tor](/tor-onion/README.md)
 
 ### Package Management
-- [fdroid-repo](/fdroid-repo/README.md)
+- [fdroid](/fdroid-repo/README.md)
+
+### Full-text search
+- [Typesense](/typesense/README.md)
+
 
 ### Email
 - [Postal](/postal/README.md)
