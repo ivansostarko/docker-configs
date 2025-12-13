@@ -1,0 +1,120 @@
+services:
+  mongo_backup:
+    build:
+      context: ./backup
+      dockerfile: Dockerfile
+    container_name: mongo_backup
+    restart: unless-stopped
+
+    environment:
+      TZ: ${TZ:-Europe/Zagreb}
+
+      BACKUP_CRON: ${BACKUP_CRON:-"15 02 * * *"}
+      RETENTION_DAYS: ${RETENTION_DAYS:-14}
+      BACKUP_DIR: ${BACKUP_DIR:-/backups}
+      STATE_DIR: ${STATE_DIR:-/state}
+
+      USE_OPLOG: ${USE_OPLOG:-true}
+      MONGODUMP_EXTRA_ARGS: ${MONGODUMP_EXTRA_ARGS:-""}
+
+      ENCRYPTION_ENABLED: ${ENCRYPTION_ENABLED:-false}
+      ENCRYPTION_CIPHER: ${ENCRYPTION_CIPHER:-aes-256-cbc}
+      ENCRYPTION_PBKDF2: ${ENCRYPTION_PBKDF2:-true}
+
+      S3_ENABLED: ${S3_ENABLED:-false}
+      S3_BUCKET: ${S3_BUCKET:-""}
+      S3_PREFIX: ${S3_PREFIX:-"mongodb"}
+      AWS_REGION: ${AWS_REGION:-"eu-central-1"}
+      S3_ENDPOINT: ${S3_ENDPOINT:-""}
+
+      PUSHGATEWAY_URL: ${PUSHGATEWAY_URL:-""}
+      METRICS_JOB: ${METRICS_JOB:-mongodb_backup}
+      METRICS_INSTANCE: ${METRICS_INSTANCE:-mongo_backup}
+
+      MONGO_URI_FILE: /run/secrets/mongo_uri
+      AWS_ACCESS_KEY_ID_FILE: /run/secrets/aws_access_key_id
+      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/aws_secret_access_key
+      ENCRYPTION_PASSPHRASE_FILE: /run/secrets/backup_encryption_passphrase
+
+      MAX_BACKUP_AGE_HOURS: ${MAX_BACKUP_AGE_HOURS:-36}
+
+    secrets:
+      - mongo_uri
+      - aws_access_key_id
+      - aws_secret_access_key
+      - backup_encryption_passphrase
+
+    volumes:
+      - mongo_backups:${BACKUP_DIR:-/backups}
+      - mongo_backup_state:${STATE_DIR:-/state}
+
+    networks:
+      - backup_net
+      - monitoring
+
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+      - /var/run
+      - /var/spool/cron
+      - /var/log
+
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/local/bin/healthcheck.sh"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  pushgateway:
+    image: prom/pushgateway:latest
+    container_name: pushgateway
+    restart: unless-stopped
+    profiles: ["metrics"]
+    ports:
+      - "${PUSHGATEWAY_PORT:-9091}:9091"
+    networks:
+      - monitoring
+    volumes:
+      - pushgateway_data:/data
+    command:
+      - "--persistence.file=/data/pushgateway.db"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9091/-/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  backup_net:
+    name: mongo_backup_net
+    driver: bridge
+    internal: true
+  monitoring:
+    name: monitoring_net
+    driver: bridge
+
+volumes:
+  mongo_backups:
+    name: mongo_backups
+  mongo_backup_state:
+    name: mongo_backup_state
+  pushgateway_data:
+    name: pushgateway_data
+
+secrets:
+  mongo_uri:
+    file: ./secrets/mongo_uri.txt
+  aws_access_key_id:
+    file: ./secrets/aws_access_key_id.txt
+  aws_secret_access_key:
+    file: ./secrets/aws_secret_access_key.txt
+  backup_encryption_passphrase:
+    file: ./secrets/backup_encryption_passphrase.txt
