@@ -1,0 +1,123 @@
+name: beanstalkd-monitoring
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+networks:
+  # Prometheus/Grafana typically already sit on a shared monitoring network.
+  # This compose expects it to exist; create it with:
+  #   docker network create monitoring
+  monitoring:
+    name: ${MONITORING_NETWORK:-monitoring}
+    external: true
+
+  # Internal-only network for queue <-> exporter.
+  queue_internal:
+    name: ${QUEUE_INTERNAL_NETWORK:-queue_internal}
+    internal: true
+
+volumes:
+  beanstalkd_wal:
+    name: beanstalkd_wal
+
+secrets:
+  # Contains a single line: host:port (e.g. beanstalkd:11300 or 10.0.0.12:11300)
+  # NOTE: This is not a password secret (beanstalkd has no native auth); it is a hygiene pattern.
+  beanstalkd_address:
+    file: ./secrets/beanstalkd_address.txt
+
+services:
+  # ------------------------------------------------------------
+  # OPTIONAL: Beanstalkd itself (enable only if you want a local queue)
+  #
+  # Start with:
+  #   docker compose --profile stack up -d
+  # ------------------------------------------------------------
+  beanstalkd:
+    profiles: ["stack"]
+    image: touchify/beanstalkd:latest
+    container_name: beanstalkd
+    restart: unless-stopped
+    environment:
+      BEANSTALKD_PORT: ${BEANSTALKD_PORT:-11300}
+      BEANSTALKD_LOG_ENABLE: ${BEANSTALKD_LOG_ENABLE:-1}
+      BEANSTALKD_LOG_DIR: ${BEANSTALKD_LOG_DIR:-/var/cache/beanstalkd}
+      BEANSTALKD_LOG_SIZE: ${BEANSTALKD_LOG_SIZE:-10485760}
+      BEANSTALKD_FSYNC_INTERVAL: ${BEANSTALKD_FSYNC_INTERVAL:-50}
+      BEANSTALKD_JOB_MAX_SIZE: ${BEANSTALKD_JOB_MAX_SIZE:-65535}
+      BEANSTALKD_VERBOSE: ${BEANSTALKD_VERBOSE:-0}
+    volumes:
+      - beanstalkd_wal:${BEANSTALKD_LOG_DIR:-/var/cache/beanstalkd}
+    networks:
+      - queue_internal
+    expose:
+      - "11300"
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+
+  # ------------------------------------------------------------
+  # Beanstalkd Exporter (Prometheus scrapes this)
+  #
+  # Exposes /metrics over HTTP.
+  # ------------------------------------------------------------
+  beanstalkd_exporter:
+    image: dtannock/beanstalkd-exporter:0.2.0
+    container_name: beanstalkd_exporter
+    restart: unless-stopped
+
+    secrets:
+      - beanstalkd_address
+    volumes:
+      - ./exporter/entrypoint.sh:/entrypoint.sh:ro
+
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+
+    environment:
+      # Fallback target if the secret isn't present or empty.
+      # From the exporter container perspective, this must be reachable.
+      BEANSTALKD_ADDRESS_FALLBACK: ${BEANSTALKD_ADDRESS_FALLBACK:-beanstalkd:11300}
+
+      # Metrics scope:
+      # - system metrics only by default
+      # - enable tube metrics by setting ALL_TUBES=true OR listing TUBES
+      BEANSTALKD_ALL_TUBES: ${BEANSTALKD_ALL_TUBES:-false}
+      BEANSTALKD_TUBES: ${BEANSTALKD_TUBES:-}
+
+      # Optional metric filtering (comma-separated names)
+      BEANSTALKD_SYSTEM_METRICS: ${BEANSTALKD_SYSTEM_METRICS:-}
+      BEANSTALKD_TUBE_METRICS: ${BEANSTALKD_TUBE_METRICS:-}
+
+      # Exporter listen config
+      EXPORTER_PORT: ${BEANSTALKD_EXPORTER_PORT:-8080}
+
+    networks:
+      - monitoring
+      - queue_internal
+
+    # If Prometheus is on the same docker network, you do NOT need to publish ports.
+    # Uncomment only for host-level scraping/debug.
+    # ports:
+    #   - "${BEANSTALKD_EXPORTER_PORT:-8080}:8080"
+
+    logging: *default-logging
+
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    # Healthcheck depends on the presence of wget/grep in the image.
+    # If it fails in your environment, disable it or build a thin wrapper image with curl.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${BEANSTALKD_EXPORTER_PORT:-8080}/metrics | grep -q '^beanstalkd_up'"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s

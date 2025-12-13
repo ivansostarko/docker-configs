@@ -1,0 +1,22 @@
+groups:
+  - name: beanstalkd.rules
+    rules:
+      - alert: BeanstalkdExporterDown
+        expr: beanstalkd_up == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Beanstalkd exporter cannot scrape Beanstalkd"
+          description: "beanstalkd_up is 0 for 5m (target unreachable or queue down)."
+
+      - alert: BeanstalkdHighReadyJobs
+        # Metric name may differ depending on exporter version and enabled filters.
+        # Adjust after confirming in Prometheus: current_jobs_ready_count / beanstalkd_current_jobs_ready, etc.
+        expr: current_jobs_ready_count > 1000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Beanstalkd backlog is high"
+          description: "Ready jobs > 1000 for 10m. Consumers may be stuck or underprovisioned."
