@@ -1,0 +1,18 @@
+# Dev container for Angular (ng serve) with bind-mounted workspace.
+# - Keeps node_modules in a named volume to avoid host/OS mismatch
+# - Uses polling watchers for reliability in containers
+FROM node:22-alpine
+
+WORKDIR /workspace
+
+RUN apk add --no-cache bash curl git openssh-client
+
+# Install Angular CLI globally (pin to a major if you prefer)
+RUN npm i -g @angular/cli
+
+# Entrypoint script
+COPY ./angular/scripts/dev-entrypoint.sh /usr/local/bin/dev-entrypoint.sh
+RUN chmod +x /usr/local/bin/dev-entrypoint.sh
+
+EXPOSE 4200
+ENTRYPOINT ["dev-entrypoint.sh"]

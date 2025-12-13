@@ -1,0 +1,223 @@
+name: angular21
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-hc-defaults: &hc_defaults
+  interval: 10s
+  timeout: 5s
+  retries: 12
+  start_period: 20s
+
+x-common-env: &common_env
+  TZ: ${TZ:-Europe/Zagreb}
+
+services:
+  # =========================
+  # Angular 21 - Development (ng serve)
+  # =========================
+  angular_dev:
+    profiles: ["dev"]
+    build:
+      context: .
+      dockerfile: ./angular/Dockerfile.dev
+    container_name: angular21_dev
+    init: true
+    working_dir: /workspace
+    env_file: ./.env
+    environment:
+      <<: *common_env
+      NODE_ENV: development
+      # File-watcher reliability for bind mounts (especially on macOS/Windows/VMs)
+      CHOKIDAR_USEPOLLING: ${CHOKIDAR_USEPOLLING:-true}
+      CHOKIDAR_INTERVAL: ${CHOKIDAR_INTERVAL:-200}
+      # Disable noisy/slow things in containers
+      NG_CLI_ANALYTICS: "false"
+      NPM_CONFIG_FUND: "false"
+      NPM_CONFIG_AUDIT: "false"
+      # Optional: point Angular to an API gateway
+      API_BASE_URL: ${API_BASE_URL:-http://host.docker.internal:3000}
+    secrets:
+      - npm_token
+    volumes:
+      - ./app:/workspace:delegated
+      - node_modules:/workspace/node_modules
+      - angular_cache:/workspace/.angular
+    ports:
+      - "${ANGULAR_DEV_PORT:-4200}:4200"
+    networks:
+      - app_net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4200/ >/dev/null || exit 1"]
+      <<: *hc_defaults
+    restart: unless-stopped
+    logging: *default-logging
+
+  # =========================
+  # Angular 21 - Production (build + nginx)
+  # =========================
+  angular_web:
+    profiles: ["prod"]
+    build:
+      context: .
+      dockerfile: ./angular/Dockerfile
+      args:
+        ANGULAR_BUILD_CONFIGURATION: ${ANGULAR_BUILD_CONFIGURATION:-production}
+        BASE_HREF: ${BASE_HREF:-/}
+    container_name: angular21_web
+    ports:
+      - "${ANGULAR_WEB_PORT:-8080}:80"
+    networks:
+      - app_net
+      - monitoring_net
+    configs:
+      - source: nginx_default_conf
+        target: /etc/nginx/conf.d/default.conf
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/healthz >/dev/null || exit 1"]
+      <<: *hc_defaults
+    restart: unless-stopped
+    logging: *default-logging
+
+  # =========================
+  # Metrics: Nginx exporter (Prometheus)
+  # =========================
+  nginx_exporter:
+    profiles: ["monitoring"]
+    image: nginx/nginx-prometheus-exporter:latest
+    container_name: angular21_nginx_exporter
+    command:
+      - "--nginx.scrape-uri=http://angular_web/nginx_status"
+    depends_on:
+      - angular_web
+    networks:
+      - app_net
+      - monitoring_net
+    ports:
+      - "${NGINX_EXPORTER_PORT:-9113}:9113"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9113/metrics >/dev/null || exit 1"]
+      <<: *hc_defaults
+    restart: unless-stopped
+    logging: *default-logging
+
+  # =========================
+  # Monitoring: Prometheus
+  # =========================
+  prometheus:
+    profiles: ["monitoring"]
+    image: prom/prometheus:latest
+    container_name: angular21_prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}"
+      - "--web.enable-lifecycle"
+    configs:
+      - source: prometheus_yml
+        target: /etc/prometheus/prometheus.yml
+    volumes:
+      - prometheus_data:/prometheus
+    networks:
+      - monitoring_net
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy >/dev/null || exit 1"]
+      <<: *hc_defaults
+    restart: unless-stopped
+    logging: *default-logging
+
+  # =========================
+  # Monitoring: Grafana
+  # =========================
+  grafana:
+    profiles: ["monitoring"]
+    image: grafana/grafana:latest
+    container_name: angular21_grafana
+    depends_on:
+      - prometheus
+    environment:
+      <<: *common_env
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3000}
+    secrets:
+      - grafana_admin_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+    configs:
+      - source: grafana_datasource
+        target: /etc/grafana/provisioning/datasources/datasource.yml
+      - source: grafana_dashboards_provider
+        target: /etc/grafana/provisioning/dashboards/provider.yml
+    networks:
+      - monitoring_net
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health >/dev/null || exit 1"]
+      <<: *hc_defaults
+    restart: unless-stopped
+    logging: *default-logging
+
+  # =========================
+  # Monitoring: cAdvisor (container metrics)
+  # =========================
+  cadvisor:
+    profiles: ["monitoring"]
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: angular21_cadvisor
+    privileged: true
+    devices:
+      - "/dev/kmsg:/dev/kmsg"
+    volumes:
+      - "/:/rootfs:ro"
+      - "/var/run:/var/run:rw"
+      - "/sys:/sys:ro"
+      - "/var/lib/docker/:/var/lib/docker:ro"
+    networks:
+      - monitoring_net
+    ports:
+      - "${CADVISOR_PORT:-8081}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz >/dev/null || exit 1"]
+      <<: *hc_defaults
+    restart: unless-stopped
+    logging: *default-logging
+
+configs:
+  nginx_default_conf:
+    file: ./angular/nginx/default.conf
+  prometheus_yml:
+    file: ./prometheus/prometheus.yml
+  grafana_datasource:
+    file: ./grafana/provisioning/datasources/datasource.yml
+  grafana_dashboards_provider:
+    file: ./grafana/provisioning/dashboards/provider.yml
+
+secrets:
+  # For private registries: used by the dev container to configure npm auth
+  npm_token:
+    file: ./secrets/npm_token.txt
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password.txt
+
+networks:
+  app_net:
+    driver: bridge
+  monitoring_net:
+    driver: bridge
+    internal: true
+
+volumes:
+  node_modules:
+  angular_cache:
+  prometheus_data:
+  grafana_data:

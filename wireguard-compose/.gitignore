@@ -1,0 +1,9 @@
+# Key material / secrets
+**/secrets/
+**/*.privatekey
+**/*.presharedkey
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/

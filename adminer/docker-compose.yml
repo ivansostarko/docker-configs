@@ -1,0 +1,162 @@
+name: adminer-stack
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+networks:
+  frontend:
+    name: ${COMPOSE_PROJECT_NAME:-adminer}-frontend
+    driver: bridge
+  backend:
+    name: ${COMPOSE_PROJECT_NAME:-adminer}-backend
+    driver: bridge
+    internal: true
+
+volumes:
+  nginx_logs:
+    name: ${COMPOSE_PROJECT_NAME:-adminer}_nginx_logs
+  prometheus_data:
+    name: ${COMPOSE_PROJECT_NAME:-adminer}_prometheus_data
+  grafana_data:
+    name: ${COMPOSE_PROJECT_NAME:-adminer}_grafana_data
+
+secrets:
+  adminer_htpasswd:
+    # Create this file with: htpasswd -nbB <user> <password> > ./secrets/adminer.htpasswd
+    file: ./secrets/adminer.htpasswd
+
+configs:
+  nginx_conf:
+    file: ./nginx/nginx.conf
+  prometheus_conf:
+    file: ./monitoring/prometheus.yml
+
+services:
+  adminer:
+    image: adminer:4
+    restart: unless-stopped
+    networks:
+      - backend
+    environment:
+      ADMINER_DEFAULT_SERVER: ${ADMINER_DEFAULT_SERVER:-db}
+      # Optional:
+      # ADMINER_DESIGN: ${ADMINER_DESIGN:-nette}
+      # ADMINER_PLUGINS: ${ADMINER_PLUGINS:-tables-filter tinymce}
+    expose:
+      - "8080"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "php -r 'exit(@file_get_contents("http://127.0.0.1:8080/") ? 0 : 1);'"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  adminer-proxy:
+    image: nginx:alpine
+    restart: unless-stopped
+    depends_on:
+      adminer:
+        condition: service_healthy
+    ports:
+      - "${ADMINER_HTTP_PORT:-8080}:80"
+    networks:
+      - frontend
+      - backend
+    configs:
+      - source: nginx_conf
+        target: /etc/nginx/nginx.conf
+        mode: 0444
+    secrets:
+      - source: adminer_htpasswd
+        target: /etc/nginx/.htpasswd
+        mode: 0400
+    volumes:
+      - nginx_logs:/var/log/nginx
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:rw,noexec,nosuid,size=64m
+      - /var/run:rw,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:1
+    restart: unless-stopped
+    profiles: ["metrics"]
+    depends_on:
+      adminer-proxy:
+        condition: service_healthy
+    command:
+      - -nginx.scrape-uri=http://adminer-proxy:8081/stub_status
+    networks:
+      - backend
+    ports:
+      - "${NGINX_EXPORTER_PORT:-9113}:9113"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    profiles: ["metrics"]
+    networks:
+      - backend
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    configs:
+      - source: prometheus_conf
+        target: /etc/prometheus/prometheus.yml
+        mode: 0444
+    volumes:
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/ready >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging: *default-logging
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    profiles: ["metrics"]
+    networks:
+      - backend
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging: *default-logging

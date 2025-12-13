@@ -1,0 +1,60 @@
+services:
+  wg-server:
+    image: lscr.io/linuxserver/wireguard:latest
+    container_name: wg-server
+    restart: unless-stopped
+
+    # WireGuard is a kernel interface. These capabilities are not optional.
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+
+    # Strongly recommended for a VPN gateway: avoid Docker NAT and preserve routing behavior.
+    # If you cannot use host networking, remove this and add: ports: ["${WG_PORT}:51820/udp"]
+    network_mode: "host"
+
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TZ}
+
+      # Keeping these for discoverability/logging.
+      # This stack uses an explicit wg0.conf (mounted under /config/wg_confs).
+      - SERVERURL=${WG_SERVER_ENDPOINT}
+      - SERVERPORT=${WG_PORT}
+      - INTERNAL_SUBNET=${WG_SUBNET_CIDR}
+
+    volumes:
+      - ./config:/config
+      - /lib/modules:/lib/modules:ro
+
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.src_valid_mark=1
+      - net.ipv6.conf.all.forwarding=1
+
+    healthcheck:
+      test: ["CMD-SHELL", "wg show wg0 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wg-exporter:
+    image: ghcr.io/mdlayher/wireguard_exporter:latest
+    container_name: wg-exporter
+    restart: unless-stopped
+    network_mode: "host"
+    depends_on:
+      - wg-server
+
+    command:
+      - "--interfaces=wg0"
+      - "--listen-address=:${WG_EXPORTER_PORT}"
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${WG_EXPORTER_PORT}/metrics >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

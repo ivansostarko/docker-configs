@@ -1,0 +1,33 @@
+services:
+  wg-client:
+    image: lscr.io/linuxserver/wireguard:latest
+    container_name: wg-client
+    restart: unless-stopped
+
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+
+    # Recommended: WireGuard behaves like a host interface; keep routing predictable.
+    network_mode: "host"
+
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TZ}
+
+    volumes:
+      - ./config:/config
+      - /lib/modules:/lib/modules:ro
+
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.src_valid_mark=1
+      - net.ipv6.conf.all.forwarding=1
+
+    healthcheck:
+      test: ["CMD-SHELL", "wg show wg0 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s

@@ -1,0 +1,188 @@
+services:
+  mindsdb:
+    image: mindsdb/mindsdb:latest
+    container_name: mindsdb
+    restart: unless-stopped
+
+    ports:
+      - "${MINDSDB_HTTP_PORT}:47334"   # UI + HTTP API + MCP (/mcp/) + A2A (/a2a/)
+      - "${MINDSDB_MYSQL_PORT}:47335"  # MySQL wire protocol
+
+    environment:
+      MINDSDB_APIS: "${MINDSDB_APIS}"
+
+      # Auth
+      MINDSDB_USERNAME: "${MINDSDB_USERNAME}"
+      MINDSDB_PASSWORD: "${MINDSDB_PASSWORD}"
+      MINDSDB_HTTP_AUTH_TYPE: "${MINDSDB_HTTP_AUTH_TYPE}"
+
+      # Custom config.json + storage
+      MINDSDB_CONFIG_PATH: "/etc/mindsdb/config.json"
+      MINDSDB_STORAGE_DIR: "/mindsdb/var"
+
+      # MindsDB internal “config storage” DB connection
+      # Set MINDSDB_DB_CON="" in .env to fall back to local sqlite.
+      MINDSDB_DB_CON: "${MINDSDB_DB_CON}"
+
+      # Logging
+      MINDSDB_LOG_LEVEL: "${MINDSDB_LOG_LEVEL}"
+      MINDSDB_CONSOLE_LOG_LEVEL: "${MINDSDB_CONSOLE_LOG_LEVEL}"
+
+      # GUI update behavior (avoid surprise downloads in prod)
+      MINDSDB_GUI_AUTOUPDATE: "${MINDSDB_GUI_AUTOUPDATE}"
+
+      # Optional default LLM keys
+      MINDSDB_DEFAULT_LLM_API_KEY: "${MINDSDB_DEFAULT_LLM_API_KEY}"
+      MINDSDB_DEFAULT_EMBEDDING_MODEL_API_KEY: "${MINDSDB_DEFAULT_EMBEDDING_MODEL_API_KEY}"
+      MINDSDB_DEFAULT_RERANKING_MODEL_API_KEY: "${MINDSDB_DEFAULT_RERANKING_MODEL_API_KEY}"
+
+      # Optional OpenTelemetry (best-effort)
+      OTEL_EXPORTER_TYPE: "${OTEL_EXPORTER_TYPE}"
+      OTEL_OTLP_ENDPOINT: "http://otel-collector:4317"
+      OTEL_SERVICE_NAME: "mindsdb"
+
+    volumes:
+      - mindsdb_data:/mindsdb/var
+      - ./configs/mindsdb/config.json:/etc/mindsdb/config.json:ro
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:47334/api/util/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+
+    networks:
+      - mindsdb_front
+      - mindsdb_back
+
+  postgres:
+    image: postgres:16
+    container_name: mindsdb-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_DB: "${POSTGRES_DB}"
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+
+    secrets:
+      - postgres_password
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+    networks:
+      - mindsdb_back
+
+  # Optional ML queue backend (enable by `docker compose --profile queue up -d`)
+  redis:
+    image: redis:7-alpine
+    container_name: mindsdb-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mindsdb_back
+    profiles: ["queue"]
+
+  # Observability stack (enable by `docker compose --profile observability up -d`)
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.116.1
+    container_name: mindsdb-otel
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./configs/otel/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+      - "8889:8889"   # Prometheus exporter endpoint
+    networks:
+      - mindsdb_back
+    profiles: ["observability"]
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: mindsdb-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    volumes:
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom_data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+    networks:
+      - mindsdb_back
+    profiles: ["observability"]
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: mindsdb-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    networks:
+      - mindsdb_back
+    profiles: ["observability"]
+
+  # Optional auto-heal (enable by `docker compose --profile ops up -d`)
+  # NOTE: This mounts docker.sock and is therefore a privileged component.
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: mindsdb-autoheal
+    restart: unless-stopped
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: "all"
+      AUTOHEAL_INTERVAL: "10"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - mindsdb_back
+    profiles: ["ops"]
+
+networks:
+  mindsdb_front:
+    name: mindsdb_front
+  mindsdb_back:
+    name: mindsdb_back
+    internal: true
+
+volumes:
+  mindsdb_data:
+  postgres_data:
+  redis_data:
+  prom_data:
+  grafana_data:
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  mindsdb_admin_password:
+    file: ./secrets/mindsdb_admin_password.txt
+  openai_api_key:
+    file: ./secrets/openai_api_key.txt
