@@ -1,0 +1,11 @@
+groups:
+  - name: node.rules
+    rules:
+      - alert: InstanceDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Target down (instance={{ $labels.instance }})"
+          description: "Prometheus target is down for >2 minutes."

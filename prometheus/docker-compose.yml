@@ -1,0 +1,91 @@
+services:
+  prometheus:
+    image: prom/prometheus:${PROMETHEUS_IMAGE_TAG:-latest}
+    # container_name: prometheus   # convenient, but hurts scaling/replicas
+    hostname: prometheus
+    restart: unless-stopped
+
+    # Run as non-root (Prometheus image typically uses nobody)
+    user: "${PROMETHEUS_UID:-65534}:${PROMETHEUS_GID:-65534}"
+
+    # Prometheus args (tune via .env)
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=${PROMETHEUS_RETENTION_TIME:-15d}"
+      - "--storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-0}" # 0 = disabled
+      - "--web.listen-address=0.0.0.0:9090"
+      - "--web.external-url=${PROMETHEUS_EXTERNAL_URL:-}"
+      - "--web.route-prefix=${PROMETHEUS_ROUTE_PREFIX:-/}"
+      - "--web.enable-lifecycle"
+      - "--log.level=${PROMETHEUS_LOG_LEVEL:-info}"
+      # Optional: TLS/basic-auth config for Prometheus web/UI
+      - "--web.config.file=/etc/prometheus/web.yml"
+
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+
+    networks:
+      - asterix_network
+
+    volumes:
+      - prometheus_data:/prometheus
+
+      - type: bind
+        source: ./config/prometheus/prometheus.yml
+        target: /etc/prometheus/prometheus.yml
+        read_only: true
+
+      - type: bind
+        source: ./config/prometheus/rules
+        target: /etc/prometheus/rules
+        read_only: true
+
+      # Optional: web TLS/basic-auth config
+      - type: bind
+        source: ./config/prometheus/web.yml
+        target: /etc/prometheus/web.yml
+        read_only: true
+
+    secrets:
+      - prometheus_tls_cert
+      - prometheus_tls_key
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/ready | grep -q 'Prometheus' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    stop_grace_period: 30s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  asterix_network:
+    name: asterix_network
+    driver: bridge
+    attachable: true
+
+volumes:
+  prometheus_data:
+    name: prometheus_data
+
+secrets:
+  prometheus_tls_cert:
+    file: ./secrets/prometheus/tls.crt
+  prometheus_tls_key:
+    file: ./secrets/prometheus/tls.key

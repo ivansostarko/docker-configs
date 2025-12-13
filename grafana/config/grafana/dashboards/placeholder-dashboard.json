@@ -1,0 +1,19 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [],
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["placeholder"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Placeholder Dashboard",
+  "uid": "placeholder",
+  "version": 1
+}

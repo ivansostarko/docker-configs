@@ -1,0 +1,213 @@
+name: asterix
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-restart: &default-restart
+  restart: unless-stopped
+
+x-security: &default-security
+  init: true
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  # ------------------------
+  # Postal
+  # ------------------------
+  postal:
+    image: tiredofit/postal:latest
+    container_name: postal
+    hostname: postal
+    <<: [*default-restart, *default-security]
+    env_file:
+      - .env
+    depends_on:
+      postal-mariadb:
+        condition: service_healthy
+      postal-rabbitmq:
+        condition: service_healthy
+
+    environment:
+      # Database (internal)
+      DB_HOST: postal-mariadb
+      DB_NAME: ${POSTAL_DB_NAME}
+      DB_USER: ${POSTAL_DB_USER}
+      DB_PASS: ${POSTAL_DB_PASSWORD}
+      DB_ROOT_PASS: ${POSTAL_DB_ROOT_PASSWORD}
+
+      # RabbitMQ (internal)
+      RABBITMQ_HOST: postal-rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_PASS: ${RABBITMQ_DEFAULT_PASS}
+      RABBITMQ_VHOST: ${RABBITMQ_DEFAULT_VHOST}
+
+      # Admin bootstrap
+      ADMIN_EMAIL: ${POSTAL_ADMIN_EMAIL}
+      ADMIN_FNAME: ${POSTAL_ADMIN_FNAME}
+      ADMIN_LNAME: ${POSTAL_ADMIN_LNAME}
+      ADMIN_PASS: ${POSTAL_ADMIN_PASS}
+
+      # DNS / Web identity (must match real DNS)
+      DNS_HOSTNAME: ${POSTAL_DNS_HOSTNAME}
+      WEB_HOSTNAME: ${POSTAL_WEB_HOSTNAME}
+
+      # Optional hard-disable extras (keeps footprint smaller)
+      ENABLE_CLAMAV: "false"
+      ENABLE_SPAMASSASSIN: "false"
+
+    volumes:
+      - ./config/postal:/config:rw
+      - postal_logs:/logs:rw
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 256m
+
+    ports:
+      - "${POSTAL_SMTP_HOST_PORT:-2525}:25"
+      - "${POSTAL_WEB_HOST_PORT:-8088}:80"
+      - "${POSTAL_TRACKING_HOST_PORT:-8089}:8080"
+
+    networks:
+      - asterix_network
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+    stop_grace_period: 60s
+    logging: *default-logging
+
+    deploy:
+      resources:
+        limits:
+          memory: ${POSTAL_MEM_LIMIT:-2g}
+
+  # ------------------------
+  # MariaDB for Postal
+  # ------------------------
+  postal-mariadb:
+    image: mariadb:10.11
+    container_name: postal-mariadb
+    hostname: postal-mariadb
+    <<: [*default-restart, *default-security]
+    env_file:
+      - .env
+    environment:
+      MARIADB_ROOT_PASSWORD: ${POSTAL_DB_ROOT_PASSWORD}
+      MARIADB_DATABASE: ${POSTAL_DB_NAME}
+      MARIADB_USER: ${POSTAL_DB_USER}
+      MARIADB_PASSWORD: ${POSTAL_DB_PASSWORD}
+      MARIADB_AUTO_UPGRADE: "1"
+
+    volumes:
+      - postal_mariadb_data:/var/lib/mysql:rw
+      - ./config/postal-mariadb/my.cnf:/etc/mysql/conf.d/99-postal.cnf:ro
+
+    networks:
+      - asterix_network
+
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u${POSTAL_DB_USER} -p${POSTAL_DB_PASSWORD} --silent || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+    shm_size: "512m"
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    logging: *default-logging
+
+  # ------------------------
+  # RabbitMQ for Postal
+  # ------------------------
+  postal-rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: postal-rabbitmq
+    hostname: postal-rabbitmq
+    <<: [*default-restart, *default-security]
+    env_file:
+      - .env
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_DEFAULT_VHOST}
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "+S 2:2"
+
+    volumes:
+      - postal_rabbitmq_data:/var/lib/rabbitmq:rw
+
+    ports:
+      - "${RABBITMQ_GUI_HOST_PORT:-15672}:15672"
+      - "${RABBITMQ_METRICS_HOST_PORT:-15692}:15692"
+
+    networks:
+      - asterix_network
+
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+    logging: *default-logging
+
+    command: >
+      bash -lc "
+        rabbitmq-plugins enable --offline rabbitmq_prometheus >/dev/null 2>&1 || true;
+        rabbitmq-server
+      "
+
+  # ------------------------
+  # Optional: MariaDB metrics exporter (Prometheus)
+  # ------------------------
+  postal-mariadb-exporter:
+    image: prom/mysqld-exporter:latest
+    container_name: postal-mariadb-exporter
+    <<: [*default-restart, *default-security]
+    profiles: ["metrics"]
+    depends_on:
+      postal-mariadb:
+        condition: service_healthy
+    environment:
+      DATA_SOURCE_NAME: "${POSTAL_DB_USER}:${POSTAL_DB_PASSWORD}@(postal-mariadb:3306)/"
+    ports:
+      - "${POSTAL_MARIADB_EXPORTER_HOST_PORT:-9104}:9104"
+    networks:
+      - asterix_network
+    logging: *default-logging
+
+networks:
+  asterix_network:
+    name: asterix_network
+    driver: bridge
+
+volumes:
+  postal_logs:
+    name: postal_logs
+  postal_mariadb_data:
+    name: postal_mariadb_data
+  postal_rabbitmq_data:
+    name: postal_rabbitmq_data
+
+secrets:
+  postal_db_password:
+    file: ./secrets/postal_db_password.txt
+  postal_db_root_password:
+    file: ./secrets/postal_db_root_password.txt
+  rabbitmq_password:
+    file: ./secrets/rabbitmq_password.txt
+  postal_admin_password:
+    file: ./secrets/postal_admin_password.txt

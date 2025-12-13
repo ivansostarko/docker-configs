@@ -1,0 +1,128 @@
+services:
+  # ------------------------
+  # PostgreSQL (n8n DB)
+  # ------------------------
+  n8n-postgres:
+    image: postgres:16-alpine
+    hostname: n8n-postgres
+    restart: unless-stopped
+
+    env_file: [.env]
+    environment:
+      POSTGRES_DB: ${N8N_DB_NAME}
+      POSTGRES_USER: ${N8N_DB_USER}
+      # Use Docker secret rather than plain env var
+      POSTGRES_PASSWORD_FILE: /run/secrets/n8n_db_password
+
+    volumes:
+      - n8n_postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h 127.0.0.1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+    networks: [asterix_network]
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+  # ------------------------
+  # n8n
+  # ------------------------
+  n8n:
+    # Prefer pinning a version (avoid surprise breakage from :latest)
+    image: docker.n8n.io/n8nio/n8n:${N8N_IMAGE_TAG:-latest}
+    hostname: n8n
+    restart: unless-stopped
+
+    depends_on:
+      n8n-postgres:
+        condition: service_healthy
+
+    env_file: [.env]
+    environment:
+      # --- runtime ---
+      NODE_ENV: production
+      TZ: ${TZ}
+      GENERIC_TIMEZONE: ${TZ}
+
+      # --- URL / reverse proxy correctness ---
+      N8N_HOST: ${N8N_HOST}
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: ${N8N_PROTOCOL}
+      WEBHOOK_URL: ${WEBHOOK_URL}
+
+      # --- security ---
+      # DO NOT leave this false in production; use HTTPS (reverse proxy) and keep it true.
+      N8N_SECURE_COOKIE: ${N8N_SECURE_COOKIE}
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+
+      # Stable encryption key across deploys (recommended)
+      N8N_ENCRYPTION_KEY_FILE: /run/secrets/n8n_encryption_key
+
+      # --- database: Postgres ---
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: n8n-postgres
+      DB_POSTGRESDB_PORT: "5432"
+      DB_POSTGRESDB_DATABASE: ${N8N_DB_NAME}
+      DB_POSTGRESDB_USER: ${N8N_DB_USER}
+      DB_POSTGRESDB_PASSWORD_FILE: /run/secrets/n8n_db_password
+
+      # --- metrics ---
+      N8N_METRICS: "true"
+
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+
+    # Uses Node-based healthcheck to avoid assuming curl/wget exists in the image
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"const http=require('http');const req=http.get('http://127.0.0.1:5678/healthz',res=>process.exit(res.statusCode===200?0:1));req.on('error',()=>process.exit(1));\""
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+    secrets:
+      - n8n_db_password
+      - n8n_encryption_key
+
+    networks: [asterix_network]
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+networks:
+  asterix_network:
+    # If you already have this network elsewhere, keep it external.
+    external: true
+    name: asterix_network
+
+
+volumes:
+  n8n_data:
+  n8n_postgres_data:
+
+
+secrets:
+  n8n_db_password:
+    file: ./secrets/n8n_db_password.txt
+  n8n_encryption_key:
+    file: ./secrets/n8n_encryption_key.txt

@@ -1,0 +1,85 @@
+services:
+  # ------------------------
+  # Open WebUI (OpenAI Web GUI)
+  # ------------------------
+  open-webui:
+    # DO NOT deploy "main" in production. Pin a tag for reproducibility.
+    image: ghcr.io/open-webui/open-webui:${OPEN_WEBUI_TAG:-v0.6.41}
+    container_name: open-webui
+    hostname: open-webui
+    restart: unless-stopped
+    init: true
+
+    networks:
+      - asterix_network
+
+    ports:
+      - "${OLLAMA_GUI_PORT:-3000}:8080"
+
+    volumes:
+      - open-webui:/app/backend/data
+
+    env_file:
+      - .env
+
+    environment:
+      # Ollama backend (container-to-container)
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://ollama:11434}"
+
+      # Public URL for correct redirects/links (especially when behind a proxy)
+      WEBUI_URL: "${OPEN_WEBUI_PUBLIC_URL:-http://localhost:${OLLAMA_GUI_PORT:-3000}}"
+
+      # Persist sessions/logins across restarts/recreates
+      WEBUI_SECRET_KEY: "${OPEN_WEBUI_SECRET_KEY}"
+
+      # Optional hardening defaults
+      ENABLE_SIGNUP: "${OPEN_WEBUI_ENABLE_SIGNUP:-false}"
+
+      # Optional: OpenTelemetry (requires an OTLP collector)
+      # ENABLE_OTEL: "true"
+      # ENABLE_OTEL_METRICS: "true"
+      # OTEL_EXPORTER_OTLP_ENDPOINT: "http://grafana:4317"
+      # OTEL_EXPORTER_OTLP_INSECURE: "true"
+      # OTEL_SERVICE_NAME: "open-webui"
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+
+    # If ollama has a healthcheck, this makes ordering meaningful
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+
+networks:
+  asterix_network:
+    name: asterix_network
+    driver: bridge
+
+volumes:
+  open-webui:
+    name: open-webui
+
+secrets:
+  open_webui_secret_key:
+    file: ./secrets/open_webui_secret_key.txt

@@ -1,0 +1,11 @@
+{
+  "corp-relay": {
+    "name": "corp-relay",
+    "host": "smtp.example.com",
+    "port": "587",
+    "email": "noreply@example.com",
+    "username": "user",
+    "password": "pass",
+    "mechanism": "PLAIN"
+  }
+}

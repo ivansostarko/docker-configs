@@ -1,0 +1,190 @@
+name: asterix-observability
+
+services:
+  grafana:
+    image: grafana/grafana:latest  # Consider pinning a major/minor tag in production
+    hostname: grafana
+    restart: unless-stopped
+    env_file: [.env]
+
+    # Run as the grafana user inside the container (usually uid 472)
+    user: "472:472"
+
+    environment:
+      # --- Admin (use secrets) ---
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+
+      # --- Server / behavior ---
+      GF_SERVER_HTTP_PORT: "3000"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      GF_LOG_MODE: "console"
+
+      # --- Database (Postgres) ---
+      GF_DATABASE_TYPE: postgres
+      GF_DATABASE_HOST: grafana-postgres:5432
+      GF_DATABASE_NAME: ${GF_DATABASE_NAME}
+      GF_DATABASE_USER: ${GF_DATABASE_USERNAME}
+      GF_DATABASE_PASSWORD__FILE: /run/secrets/grafana_db_password
+      GF_DATABASE_SSL_MODE: disable
+
+      # --- Metrics for Prometheus scraping (Grafana exposes /metrics) ---
+      GF_METRICS_ENABLED: "true"
+      # Optional: protect metrics endpoint (recommended if exposed beyond the docker network)
+      # GF_METRICS_BASIC_AUTH_USERNAME: ${GF_METRICS_BASIC_AUTH_USERNAME}
+      # GF_METRICS_BASIC_AUTH_PASSWORD__FILE: /run/secrets/grafana_metrics_password
+
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+    configs:
+      - source: grafana_ini
+        target: /etc/grafana/grafana.ini
+        mode: 0444
+
+    ports:
+      - "${GF_PORT:-3000}:3000"
+
+    networks:
+      - asterix_network
+
+    depends_on:
+      grafana-postgres:
+        condition: service_healthy
+      prometheus:
+        condition: service_started
+
+    healthcheck:
+      # Uses Grafana's internal health endpoint
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health | grep -q '\"database\":\"ok\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    labels:
+      prometheus.scrape: "true"
+      prometheus.port: "3000"
+      prometheus.path: "/metrics"
+
+    secrets:
+      - grafana_admin_password
+      - grafana_db_password
+      # - grafana_metrics_password
+
+
+  grafana-postgres:
+    image: postgres:16
+    hostname: grafana-postgres
+    restart: unless-stopped
+    env_file: [.env]
+
+    environment:
+      POSTGRES_DB: ${GF_DATABASE_NAME}
+      POSTGRES_USER: ${GF_DATABASE_USERNAME}
+      POSTGRES_PASSWORD_FILE: /run/secrets/grafana_pg_password
+
+    volumes:
+      - grafana_postgres_data:/var/lib/postgresql/data
+      - ./config/grafana/postgres/init:/docker-entrypoint-initdb.d:ro
+
+    networks:
+      - asterix_network
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${GF_DATABASE_USERNAME} -d ${GF_DATABASE_NAME} -h 127.0.0.1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+
+    shm_size: "1g"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    secrets:
+      - grafana_pg_password
+
+
+  grafana-postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    hostname: grafana-postgres-exporter
+    restart: unless-stopped
+    env_file: [.env]
+
+    environment:
+      # DSN uses a secret file for password.
+      # NOTE: This relies on a shell in the container. If your image variant lacks /bin/sh, adjust accordingly.
+      DATA_SOURCE_NAME: "postgresql://${GF_DATABASE_USERNAME}:$(cat /run/secrets/grafana_pg_password)@grafana-postgres:5432/${GF_DATABASE_NAME}?sslmode=disable"
+
+    depends_on:
+      grafana-postgres:
+        condition: service_healthy
+
+    networks:
+      - asterix_network
+
+    ports:
+      - "${GF_PG_EXPORTER_PORT:-9187}:9187"
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    secrets:
+      - grafana_pg_password
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+networks:
+  asterix_network:
+    name: asterix_network
+    driver: bridge
+    # If you already created it externally, flip this to true and remove driver:
+    # external: true
+
+
+volumes:
+  grafana_data:
+    name: grafana_data
+  grafana_postgres_data:
+    name: grafana_postgres_data
+
+
+configs:
+  grafana_ini:
+    file: ./config/grafana/grafana.ini
+
+
+secrets:
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password.txt
+  grafana_db_password:
+    file: ./secrets/grafana_db_password.txt
+  grafana_pg_password:
+    file: ./secrets/grafana_pg_password.txt
+  # grafana_metrics_password:
+  #   file: ./secrets/grafana_metrics_password.txt

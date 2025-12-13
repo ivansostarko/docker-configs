@@ -1,0 +1,97 @@
+services:
+  # ------------------------
+  # MailHog (dev/test SMTP sink)
+  # ------------------------
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    container_name: mailhog
+    hostname: mailhog
+    restart: unless-stopped
+    init: true
+
+    env_file:
+      - .env
+
+    environment:
+      # Core listeners
+      MH_SMTP_BIND_ADDR: "0.0.0.0:1025"
+      MH_API_BIND_ADDR:  "0.0.0.0:8025"
+      MH_UI_BIND_ADDR:   "0.0.0.0:8025"
+
+      # Identity (EHLO/HELO, message IDs)
+      MH_HOSTNAME: "${MAILHOG_HOSTNAME:-mailhog.local}"
+
+      # Storage: memory | mongodb | maildir
+      MH_STORAGE: "${MAILHOG_STORAGE:-memory}"
+      MH_MAILDIR_PATH: "/maildir"
+
+      # Optional: serve UI under a sub-path (reverse proxy use-cases)
+      MH_UI_WEB_PATH: "${MAILHOG_UI_WEB_PATH:-}"
+
+      # Optional: allow cross-origin API calls (only set if you actually need it)
+      MH_CORS_ORIGIN: "${MAILHOG_CORS_ORIGIN:-}"
+
+      # Optional: predefined outgoing SMTP servers for "Release" action
+      MH_OUTGOING_SMTP: "/etc/mailhog/outgoing-smtp.json"
+
+      # Optional: HTTP basic auth (protects UI + API; does NOT protect SMTP)
+      MH_AUTH_FILE: "/run/secrets/mailhog_auth"
+
+    # Security: bind to localhost unless you explicitly need LAN access.
+    ports:
+      - "127.0.0.1:${MAILHOG_SMTP_PORT:-1025}:1025"  # SMTP
+      - "127.0.0.1:${MAILHOG_UI_PORT:-8025}:8025"    # Web UI + API
+
+    # Persist mail only if you select MH_STORAGE=maildir
+    volumes:
+      - mailhog_maildir:/maildir
+
+    configs:
+      - source: mailhog_outgoing_smtp
+        target: /etc/mailhog/outgoing-smtp.json
+        mode: 0444
+
+    secrets:
+      - mailhog_auth
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8025/api/v1/messages >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+
+    # Hardening knobs
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+    security_opt:
+      - no-new-privileges:true
+
+    networks:
+      - asterix_network
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  asterix_network:
+    name: asterix_network
+    driver: bridge
+    attachable: true
+
+volumes:
+  mailhog_maildir:
+    name: mailhog_maildir
+
+configs:
+  mailhog_outgoing_smtp:
+    file: ./config/mailhog/outgoing-smtp.json
+
+secrets:
+  mailhog_auth:
+    file: ./secrets/mailhog/auth.txt
