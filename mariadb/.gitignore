@@ -1,0 +1,10 @@
+# secrets should never be committed
+secrets/*.txt
+
+# env
+.env
+
+# local artifacts
+*.log
+*.sql
+.DS_Store

@@ -1,0 +1,21 @@
+[mariadb]
+# Durability basics (do not “optimize” these away unless you enjoy data loss)
+innodb_flush_log_at_trx_commit=1
+sync_binlog=1
+
+# Character set safety
+character-set-server=utf8mb4
+collation-server=utf8mb4_unicode_ci
+
+# Observability
+slow_query_log=1
+long_query_time=1
+log_slow_verbosity=query_plan,explain
+
+# Reasonable defaults; tune based on memory + workload
+innodb_buffer_pool_size=512M
+innodb_log_file_size=256M
+
+# Connections
+max_connections=200
+skip_name_resolve=1

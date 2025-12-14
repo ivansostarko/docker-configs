@@ -1,0 +1,13 @@
+# Secrets must never be committed
+secrets/*.txt
+
+# Local env
+.env
+
+# Optional local overrides
+*.local
+
+# Editor/OS
+.DS_Store
+.idea/
+.vscode/

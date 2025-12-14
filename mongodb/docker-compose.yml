@@ -1,0 +1,190 @@
+name: mongodb
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: mongodb
+    hostname: mongodb
+    restart: unless-stopped
+
+    # Keep MongoDB off the public internet. If you publish 0.0.0.0:27017, you are choosing risk.
+    ports:
+      - "127.0.0.1:${MONGO_PORT:-27017}:27017"
+
+    environment:
+      TZ: ${TZ:-Europe/Zagreb}
+
+      # Root admin user (created only on first initialization when data volume is empty)
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-root}
+      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/mongo_root_password
+
+      # App DB user (created by init scripts)
+      MONGO_APP_DB: ${MONGO_APP_DB:-appdb}
+      MONGO_APP_USER: ${MONGO_APP_USER:-appuser}
+      MONGO_APP_PASSWORD_FILE: /run/secrets/mongo_app_password
+
+      # Metrics/exporter user (created by init scripts)
+      MONGO_EXPORTER_USER: ${MONGO_EXPORTER_USER:-mongometrics}
+      MONGO_EXPORTER_PASSWORD_FILE: /run/secrets/mongo_exporter_password
+
+    secrets:
+      - mongo_root_password
+      - mongo_app_password
+      - mongo_exporter_password
+
+    volumes:
+      - mongo_data:/data/db
+      - mongo_configdb:/data/configdb
+      - ./config/mongod.conf:/etc/mongo/mongod.conf:ro
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+
+    command: ["mongod", "--config", "/etc/mongo/mongod.conf"]
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mongosh \"mongodb://${MONGO_ROOT_USER:-root}:$$(cat /run/secrets/mongo_root_password)@127.0.0.1:27017/admin?directConnection=true\" --quiet --eval \"db.adminCommand({ ping: 1 }).ok\" | grep 1"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 25s
+
+    ulimits:
+      nofile:
+        soft: 64000
+        hard: 64000
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    security_opt:
+      - no-new-privileges:true
+
+    networks:
+      - backend
+
+  mongodb-exporter:
+    image: percona/mongodb_exporter:0.43
+    container_name: mongodb-exporter
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+    environment:
+      TZ: ${TZ:-Europe/Zagreb}
+
+    # Read exporter password from Docker secret and build the URI at runtime.
+    entrypoint: ["/bin/sh", "-lc"]
+    command:
+      - |
+        export MONGODB_URI="mongodb://${MONGO_EXPORTER_USER:-mongometrics}:$(cat /run/secrets/mongo_exporter_password)@mongodb:27017/admin?authSource=admin";
+        exec /mongodb_exporter --web.listen-address=:9216 --collect-all
+
+    secrets:
+      - mongo_exporter_password
+
+    # Exporter is also bound to loopback on the host by default.
+    ports:
+      - "127.0.0.1:${MONGO_EXPORTER_PORT:-9216}:9216"
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9216/metrics >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    security_opt:
+      - no-new-privileges:true
+
+    networks:
+      - backend
+      - monitoring
+
+  # Optional: Admin UI (NOT a security boundary). Keep it local-only or behind VPN.
+  mongo-express:
+    image: mongo-express:1.0.2-20
+    container_name: mongo-express
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+    profiles: ["ui"]
+
+    ports:
+      - "127.0.0.1:${MONGO_EXPRESS_PORT:-8081}:8081"
+
+    environment:
+      TZ: ${TZ:-Europe/Zagreb}
+
+      ME_CONFIG_MONGODB_SERVER: mongodb
+      ME_CONFIG_MONGODB_PORT: 27017
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_ROOT_USER:-root}
+      ME_CONFIG_MONGODB_ADMINPASSWORD_FILE: /run/secrets/mongo_root_password
+
+      ME_CONFIG_BASICAUTH: "true"
+      ME_CONFIG_BASICAUTH_USERNAME: ${MONGO_EXPRESS_USER:-admin}
+      ME_CONFIG_BASICAUTH_PASSWORD_FILE: /run/secrets/mongo_express_password
+
+    secrets:
+      - mongo_root_password
+      - mongo_express_password
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8081/ >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    security_opt:
+      - no-new-privileges:true
+
+    networks:
+      - backend
+
+networks:
+  backend:
+    name: ${COMPOSE_PROJECT_NAME:-mongodb}_backend
+    driver: bridge
+    internal: true
+
+  monitoring:
+    name: ${COMPOSE_PROJECT_NAME:-mongodb}_monitoring
+    driver: bridge
+    internal: true
+
+volumes:
+  mongo_data:
+    name: ${COMPOSE_PROJECT_NAME:-mongodb}_mongo_data
+  mongo_configdb:
+    name: ${COMPOSE_PROJECT_NAME:-mongodb}_mongo_configdb
+
+secrets:
+  mongo_root_password:
+    file: ./secrets/mongo_root_password.txt
+  mongo_app_password:
+    file: ./secrets/mongo_app_password.txt
+  mongo_exporter_password:
+    file: ./secrets/mongo_exporter_password.txt
+  mongo_express_password:
+    file: ./secrets/mongo_express_password.txt

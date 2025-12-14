@@ -1,0 +1,185 @@
+name: mariadb-stack
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-common: &common
+  restart: unless-stopped
+  logging: *default-logging
+  security_opt:
+    - no-new-privileges:true
+
+networks:
+  db_net:
+    driver: bridge
+    internal: true
+  ops_net:
+    driver: bridge
+
+volumes:
+  mariadb_data:
+  mariadb_backups:
+
+secrets:
+  mariadb_root_password:
+    file: ./secrets/mariadb_root_password.txt
+  mariadb_app_password:
+    file: ./secrets/mariadb_app_password.txt
+  mariadb_exporter_password:
+    file: ./secrets/mariadb_exporter_password.txt
+
+services:
+  mariadb:
+    <<: *common
+    image: mariadb:11.4
+    container_name: mariadb
+    hostname: mariadb
+    networks:
+      - db_net
+    # Do NOT publish 3306 unless you have a hard requirement.
+    # If you must, uncomment and firewall it.
+    # ports:
+    #   - "${MARIADB_PORT:-3306}:3306"
+    expose:
+      - "3306"
+
+    environment:
+      TZ: ${TZ:-Europe/Zagreb}
+
+      # Initial bootstrap (ignored if data dir already initialized)
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/mariadb_root_password
+      MARIADB_DATABASE: ${MARIADB_DATABASE}
+      MARIADB_USER: ${MARIADB_USER}
+      MARIADB_PASSWORD_FILE: /run/secrets/mariadb_app_password
+
+      # Runs mariadb-upgrade automatically after image upgrades.
+      MARIADB_AUTO_UPGRADE: "1"
+
+    secrets:
+      - mariadb_root_password
+      - mariadb_app_password
+
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./mariadb/conf.d:/etc/mysql/conf.d:ro
+
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-name-resolve
+      - --max-connections=200
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mariadb-admin ping -h 127.0.0.1 -uroot -p\"$$(cat /run/secrets/mariadb_root_password)\" --silent"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+    cap_drop:
+      - NET_RAW
+
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+
+    tmpfs:
+      - /tmp
+
+  # One-shot provisioning (idempotent) to ensure users exist even when volume already existed.
+  mariadb_provision:
+    image: mariadb:11.4
+    container_name: mariadb_provision
+    networks:
+      - db_net
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    secrets:
+      - mariadb_root_password
+      - mariadb_exporter_password
+      - mariadb_app_password
+    environment:
+      MARIADB_DATABASE: ${MARIADB_DATABASE}
+      MARIADB_USER: ${MARIADB_USER}
+    volumes:
+      - ./scripts/provision-users.sh:/provision-users.sh:ro
+    entrypoint: ["/bin/bash", "/provision-users.sh"]
+    restart: "no"
+    profiles: ["ops"]
+
+  # Metrics exporter (Prometheus)
+  mariadb_exporter:
+    <<: *common
+    image: prom/mysqld-exporter:latest
+    container_name: mariadb_exporter
+    networks:
+      - db_net
+      - ops_net
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    ports:
+      - "${MARIADB_EXPORTER_PORT:-9104}:9104"
+    secrets:
+      - mariadb_exporter_password
+    environment:
+      DATA_SOURCE_NAME: "exporter:$$(cat /run/secrets/mariadb_exporter_password)@(mariadb:3306)/"
+    command:
+      - "--web.listen-address=:9104"
+      - "--collect.global_status"
+      - "--collect.global_variables"
+      - "--collect.info_schema.innodb_metrics"
+      - "--collect.info_schema.processlist"
+      - "--collect.info_schema.tables"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9104/metrics >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # Optional simple logical backups (daily by default)
+  mariadb_backup:
+    image: mariadb:11.4
+    container_name: mariadb_backup
+    networks:
+      - db_net
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    secrets:
+      - mariadb_root_password
+    environment:
+      TZ: ${TZ:-Europe/Zagreb}
+      BACKUP_SCHEDULE_SECONDS: ${BACKUP_SCHEDULE_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+    volumes:
+      - mariadb_backups:/backups
+      - ./scripts/backup-loop.sh:/backup-loop.sh:ro
+    entrypoint: ["/bin/bash", "/backup-loop.sh"]
+    restart: unless-stopped
+    profiles: ["backup"]
+
+  # Optional lightweight DB UI (keep it off the public Internet)
+  adminer:
+    image: adminer:latest
+    container_name: mariadb_adminer
+    networks:
+      - ops_net
+      - db_net
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    ports:
+      - "${ADMINER_PORT:-8080}:8080"
+    restart: unless-stopped
+    profiles: ["ops"]

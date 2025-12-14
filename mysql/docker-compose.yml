@@ -1,0 +1,213 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: mysql
+    hostname: mysql
+    restart: unless-stopped
+
+    # Default: bind to localhost to avoid accidental public exposure.
+    ports:
+      - "${MYSQL_BIND_IP:-127.0.0.1}:${MYSQL_PORT:-3306}:3306"
+
+    environment:
+      TZ: ${TZ:-Europe/Zagreb}
+
+      # Bootstrap only (used when /var/lib/mysql is empty)
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-appdb}
+      MYSQL_USER: ${MYSQL_USER:-appuser}
+
+      # Use secrets files instead of plaintext environment variables.
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+      MYSQL_PASSWORD_FILE: /run/secrets/mysql_app_password
+
+    secrets:
+      - mysql_root_password
+      - mysql_app_password
+      - mysql_exporter_password
+
+    command:
+      - --default-authentication-plugin=caching_sha2_password
+      - --mysqlx=0
+      - --local-infile=0
+
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - mysql_logs:/var/log/mysql
+      - ./mysql/conf.d:/etc/mysql/conf.d:ro
+      - ./mysql/initdb:/docker-entrypoint-initdb.d:ro
+
+    networks:
+      - db_internal
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mysqladmin ping -h 127.0.0.1 -uroot --password=\"$(cat /run/secrets/mysql_root_password)\" --silent",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+    stop_grace_period: 60s
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    tmpfs:
+      - /tmp
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  mysqld_exporter:
+    image: prom/mysqld-exporter:latest
+    container_name: mysqld_exporter
+    hostname: mysqld_exporter
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+    # Generate exporter CNF from a secret at container start.
+    entrypoint: ["/bin/sh", "/opt/exporter-entrypoint.sh"]
+
+    secrets:
+      - mysql_exporter_password
+
+    environment:
+      EXPORTER_MYSQL_HOST: mysql
+      EXPORTER_MYSQL_PORT: 3306
+      EXPORTER_MYSQL_USER: exporter
+
+    volumes:
+      - ./monitoring/exporter-entrypoint.sh:/opt/exporter-entrypoint.sh:ro
+      - mysqld_exporter_conf:/etc/mysqld_exporter
+
+    ports:
+      - "${MYSQL_EXPORTER_BIND_IP:-127.0.0.1}:${MYSQL_EXPORTER_PORT:-9104}:9104"
+
+    networks:
+      - db_internal
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9104/metrics >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    hostname: prometheus
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    depends_on:
+      mysqld_exporter:
+        condition: service_healthy
+
+    ports:
+      - "${PROMETHEUS_BIND_IP:-127.0.0.1}:${PROMETHEUS_PORT:-9090}:9090"
+
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+
+    networks:
+      - db_internal
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/ready >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    hostname: grafana
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    depends_on:
+      prometheus:
+        condition: service_healthy
+
+    ports:
+      - "${GRAFANA_BIND_IP:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
+
+    environment:
+      TZ: ${TZ:-Europe/Zagreb}
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD_FILE: /run/secrets/grafana_admin_password
+
+    secrets:
+      - grafana_admin_password
+
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+    networks:
+      - db_internal
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  adminer:
+    image: adminer:latest
+    container_name: adminer
+    restart: unless-stopped
+    profiles: ["ops"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+    ports:
+      - "${ADMINER_BIND_IP:-127.0.0.1}:${ADMINER_PORT:-8080}:8080"
+
+    environment:
+      TZ: ${TZ:-Europe/Zagreb}
+
+    networks:
+      - db_internal
+
+networks:
+  db_internal:
+    name: mysql_db_internal
+    driver: bridge
+    internal: true
+
+volumes:
+  mysql_data:
+    name: mysql_data
+  mysql_logs:
+    name: mysql_logs
+  mysqld_exporter_conf:
+    name: mysqld_exporter_conf
+  prometheus_data:
+    name: prometheus_data
+  grafana_data:
+    name: grafana_data
+
+secrets:
+  mysql_root_password:
+    file: ./secrets/mysql_root_password.txt
+  mysql_app_password:
+    file: ./secrets/mysql_app_password.txt
+  mysql_exporter_password:
+    file: ./secrets/mysql_exporter_password.txt
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password.txt
