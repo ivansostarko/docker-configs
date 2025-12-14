@@ -4,14 +4,16 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 
 ## What this repo is:
 
-### Apps
+### CMS
 - [Wordpress](/wordpress/README.md)
+
+### Cloud Storage
 - [NextCloud](/nextcloud/README.md)
+
+### Password Manager
 - [Passbolt](/passbolt/README.md)
 
-
 ### Programming languages
-- [PHP](/php/README.md)
 - [PHP Apache](/php-apache/README.md)
 - [PHP Ngnix](/php-nginx/README.md)
 - [NodeJS](/nodejs/README.md)
@@ -36,7 +38,7 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [MongoDB](/mongodb/README.md)
 - [Redis](/redis/README.md)
 - [MindsDB](/mindsdb/README.md)
-- [Elasticsearch](/elasticsearch/README.md)
+
 
 ### Databases Replications
 - [MongoDB Replication](/mongodb-replication/README.md)
@@ -45,16 +47,13 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [Redis Sentiel](/redis-sentinel/README.md)
 - [Elasticsearch Replication](/elasticsearch-replication/README.md)
 
-
 ### Logging & Log Management
 - [Kibana](/kibana/README.md)
 - [Logstash](/logstash/README.md)
 
 ### Analytics / BI
 - [Metabase](/metabase/README.md)
-- [Ma](https://redash.io/)
-https://matomo.org/pricing/
-
+- [Matomo](/matomo/README.md)
 
 ### Status Page
 - [Cachet Hq](/cachethq/README.md)
@@ -105,7 +104,7 @@ https://matomo.org/pricing/
 - [HAProxy](/haproxy/README.md)
 - [CoreDNS](/coredns/README.md)
 - [Traefik](/traefik/README.md)
-- 
+
 
 ### TLS 
 - [Certbot](/certbot/README.md)
@@ -119,7 +118,7 @@ https://matomo.org/pricing/
 
 ### Full-text search
 - [Typesense](/typesense/README.md)
-
+- [Elasticsearch](/elasticsearch/README.md)
 
 ### Email
 - [Postal](/postal/README.md)
@@ -139,6 +138,7 @@ https://matomo.org/pricing/
 
 ### Queue
 - [Kafka](/kafka/README.md)
+- [Kafk Cluster](/kafka-cluster/README.md)
 - [Beanstalkd](/beanstalkd/README.md)
 - [RabbitMq](/rabbitmq/README.md)
 
@@ -161,7 +161,7 @@ https://matomo.org/pricing/
 - [Postgres Backup](/postgres-backup/README.md)
 - [MongoDB Backup](/mongodb-backup/README.md)
 - [Bacula Backup](/bacula-backup/README.md)
-- [Databack Backup](/databack/README.md)
+- [Databack Backup](/databack-backup/README.md)
 
 
 

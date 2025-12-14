@@ -1,0 +1,269 @@
+name: kafka-kraft-cluster
+
+services:
+  kafka1:
+    image: confluentinc/cp-kafka:8.1.1
+    hostname: kafka1
+    container_name: kafka1
+    restart: unless-stopped
+    ports:
+      - "${KAFKA1_EXTERNAL_PORT}:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka1:29093,2@kafka2:29093,3@kafka3:29093"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      CLUSTER_ID: "${KAFKA_CLUSTER_ID}"
+
+      # Listener separation:
+      # - PLAINTEXT: internal broker traffic (container network)
+      # - CONTROLLER: internal controller quorum traffic (container network)
+      # - PLAINTEXT_HOST: external client traffic (host port mapping)
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+      KAFKA_LISTENERS: "PLAINTEXT://kafka1:29092,CONTROLLER://kafka1:29093,PLAINTEXT_HOST://0.0.0.0:9092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka1:29092,PLAINTEXT_HOST://${KAFKA_EXTERNAL_HOST}:${KAFKA1_EXTERNAL_PORT}"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+
+      # Replication / ISR (production-ish defaults for 3 brokers)
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+
+      # Operational tweaks
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG4J_ROOT_LOGLEVEL: "${KAFKA_LOG_LEVEL}"
+
+      # JMX (internal only; not exposed by default)
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: "kafka1"
+
+    volumes:
+      - kafka1_data:/var/lib/kafka/data
+    networks:
+      - kafka-net
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:29092 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+  kafka2:
+    image: confluentinc/cp-kafka:8.1.1
+    hostname: kafka2
+    container_name: kafka2
+    restart: unless-stopped
+    ports:
+      - "${KAFKA2_EXTERNAL_PORT}:9092"
+    environment:
+      KAFKA_NODE_ID: 2
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka1:29093,2@kafka2:29093,3@kafka3:29093"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      CLUSTER_ID: "${KAFKA_CLUSTER_ID}"
+
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+      KAFKA_LISTENERS: "PLAINTEXT://kafka2:29092,CONTROLLER://kafka2:29093,PLAINTEXT_HOST://0.0.0.0:9092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka2:29092,PLAINTEXT_HOST://${KAFKA_EXTERNAL_HOST}:${KAFKA2_EXTERNAL_PORT}"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG4J_ROOT_LOGLEVEL: "${KAFKA_LOG_LEVEL}"
+
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: "kafka2"
+
+    volumes:
+      - kafka2_data:/var/lib/kafka/data
+    networks:
+      - kafka-net
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:29092 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+  kafka3:
+    image: confluentinc/cp-kafka:8.1.1
+    hostname: kafka3
+    container_name: kafka3
+    restart: unless-stopped
+    ports:
+      - "${KAFKA3_EXTERNAL_PORT}:9092"
+    environment:
+      KAFKA_NODE_ID: 3
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka1:29093,2@kafka2:29093,3@kafka3:29093"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      CLUSTER_ID: "${KAFKA_CLUSTER_ID}"
+
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+      KAFKA_LISTENERS: "PLAINTEXT://kafka3:29092,CONTROLLER://kafka3:29093,PLAINTEXT_HOST://0.0.0.0:9092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka3:29092,PLAINTEXT_HOST://${KAFKA_EXTERNAL_HOST}:${KAFKA3_EXTERNAL_PORT}"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG4J_ROOT_LOGLEVEL: "${KAFKA_LOG_LEVEL}"
+
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: "kafka3"
+
+    volumes:
+      - kafka3_data:/var/lib/kafka/data
+    networks:
+      - kafka-net
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:29092 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+  # Optional: Web UI for Kafka (run with --profile ui)
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    restart: unless-stopped
+    depends_on:
+      kafka1: { condition: service_healthy }
+      kafka2: { condition: service_healthy }
+      kafka3: { condition: service_healthy }
+    ports:
+      - "${KAFKA_UI_PORT}:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: "${KAFKA_UI_CLUSTER_NAME}"
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "kafka1:29092,kafka2:29092,kafka3:29092"
+    networks: [kafka-net]
+    profiles: ["ui"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  # Optional: Kafka Exporter for Prometheus (run with --profile observability)
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.8.0
+    container_name: kafka-exporter
+    restart: unless-stopped
+    depends_on:
+      kafka1: { condition: service_healthy }
+      kafka2: { condition: service_healthy }
+      kafka3: { condition: service_healthy }
+    command:
+      - "--kafka.server=kafka1:29092"
+      - "--kafka.server=kafka2:29092"
+      - "--kafka.server=kafka3:29092"
+      - "--web.listen-address=:9308"
+      - "--log.level=${KAFKA_EXPORTER_LOG_LEVEL}"
+    ports:
+      - "${KAFKA_EXPORTER_PORT}:9308"
+    networks: [kafka-net]
+    profiles: ["observability"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9308/metrics >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  # Optional: Prometheus (run with --profile observability)
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=${PROMETHEUS_RETENTION}"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+    networks: [kafka-net]
+    profiles: ["observability"]
+    depends_on:
+      kafka-exporter: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/ready >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  # Optional: Grafana (run with --profile observability)
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: grafana
+    restart: unless-stopped
+    depends_on:
+      prometheus: { condition: service_healthy }
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    networks: [kafka-net]
+    profiles: ["observability"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  # Optional: create topics after the cluster is healthy (run with --profile init)
+  kafka-init:
+    image: confluentinc/cp-kafka:8.1.1
+    container_name: kafka-init
+    depends_on:
+      kafka1: { condition: service_healthy }
+      kafka2: { condition: service_healthy }
+      kafka3: { condition: service_healthy }
+    entrypoint: ["/bin/bash", "-lc"]
+    command: ["/scripts/create-topics.sh"]
+    environment:
+      BOOTSTRAP_SERVERS: "kafka1:29092,kafka2:29092,kafka3:29092"
+      TOPICS: "${KAFKA_INIT_TOPICS}"
+      TOPIC_PARTITIONS: "${KAFKA_INIT_PARTITIONS}"
+      TOPIC_RF: "${KAFKA_INIT_RF}"
+    volumes:
+      - ./scripts:/scripts:ro
+    networks: [kafka-net]
+    profiles: ["init"]
+    restart: "no"
+
+networks:
+  kafka-net:
+    name: kafka-net
+    driver: bridge
+
+volumes:
+  kafka1_data:
+  kafka2_data:
+  kafka3_data:
+  prometheus_data:
+  grafana_data:

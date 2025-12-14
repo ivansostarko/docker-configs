@@ -1,0 +1,8 @@
+# Environment
+.env
+
+# Grafana / Prometheus data (we persist via docker volumes, but keep the dir clean)
+config/**/data
+
+# OS
+.DS_Store
