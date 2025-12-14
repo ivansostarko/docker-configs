@@ -1,0 +1,10 @@
+# env / secrets
+.env
+secrets/*.txt
+secrets/*.key
+secrets/*.crt
+secrets/*.pem
+
+# local data (if you ever bind-mount)
+data/
+*.log

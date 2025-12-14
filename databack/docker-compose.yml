@@ -1,0 +1,182 @@
+version: "3.9"
+
+name: databack
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+networks:
+  databack_net:
+    driver: bridge
+    internal: true
+
+volumes:
+  databack_backups:
+  postgres_data:
+  redis_data:
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  databack_secret_key:
+    file: ./secrets/databack_secret_key.txt
+  sentry_dsn:
+    file: ./secrets/sentry_dsn.txt
+
+services:
+  # ------------------------
+  # PostgreSQL (Databack metadata DB)
+  # ------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: databack-postgres
+    restart: unless-stopped
+    networks: [databack_net]
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      TZ: ${TZ}
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h 127.0.0.1 -p 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+
+  # ------------------------
+  # Redis (Rearq queue / scheduler backend)
+  # ------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: databack-redis
+    restart: unless-stopped
+    networks: [databack_net]
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -h 127.0.0.1 -p 6379 ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+
+  # ------------------------
+  # Databack (Web UI + builtin worker if WORKER=True)
+  # Upstream uses network_mode: host; this stack avoids that. Configure ports here instead. 
+  # ------------------------
+  databack:
+    image: ghcr.io/long2ice/databack/databack:full
+    container_name: databack
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [databack_net]
+
+    # NOTE: The upstream README doesn't state the container's internal port when not using host networking.
+    # Default here is 8000; confirm in logs and adjust DATABACK_INTERNAL_PORT if needed.
+    ports:
+      - "${DATABACK_HTTP_PORT}:${DATABACK_INTERNAL_PORT}"
+
+    env_file:
+      - ./databack/app.env
+
+    environment:
+      TZ: ${TZ}
+
+    # Local storage option inside Databack UI can use this path.
+    volumes:
+      - databack_backups:${BACKUP_LOCAL_DIR}
+
+    # Healthcheck: verify TCP listen on internal port (more robust than assuming an HTTP path).
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import os,socket; p=int(os.getenv(\"DATABACK_INTERNAL_PORT\",\"8000\")); s=socket.create_connection((\"127.0.0.1\",p),3); s.close()'"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+
+  # ------------------------
+  # Optional: Dedicated worker(s) instead of builtin WORKER=True
+  # Upstream: rearq databack.tasks:rearq worker -t
+  # ------------------------
+  worker:
+    image: ghcr.io/long2ice/databack/databack:full
+    container_name: databack-worker-1
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [databack_net]
+    env_file:
+      - ./databack/app.env
+    environment:
+      TZ: ${TZ}
+      # Disable builtin worker in the web container if you use dedicated workers.
+      WORKER: "False"
+    entrypoint: ["rearq", "databack.tasks:rearq", "worker", "-t"]
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    profiles: ["worker"]
+
+  # ------------------------
+  # Optional Metrics (Prometheus exporters)
+  # ------------------------
+  postgres_exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:latest
+    container_name: databack-postgres-exporter
+    restart: unless-stopped
+    networks: [databack_net]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATA_SOURCE_URI: "postgres:5432/${DB_NAME}?sslmode=disable"
+      DATA_SOURCE_USER: "${DB_USER}"
+      DATA_SOURCE_PASS_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    ports:
+      - "${POSTGRES_EXPORTER_PORT}:9187"
+    profiles: ["metrics"]
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+
+  redis_exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: databack-redis-exporter
+    restart: unless-stopped
+    networks: [databack_net]
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+    ports:
+      - "${REDIS_EXPORTER_PORT}:9121"
+    profiles: ["metrics"]
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true

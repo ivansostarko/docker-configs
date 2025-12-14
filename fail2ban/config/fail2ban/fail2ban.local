@@ -1,0 +1,8 @@
+[Definition]
+# Persist bans and state across restarts
+dbfile = /config/fail2ban/fail2ban.sqlite3
+# Purge old bans (tradeoff: shorter history vs smaller DB)
+dbpurgeage = 1d
+
+# Keep logs reasonable; set to DEBUG only when diagnosing
+loglevel = INFO

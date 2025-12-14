@@ -1,0 +1,163 @@
+services:
+  uptime-kuma:
+    image: ${KUMA_IMAGE:-louislam/uptime-kuma:2}
+    container_name: uptime-kuma
+    hostname: uptime-kuma
+    restart: unless-stopped
+
+    # If you already have a reverse proxy (Traefik/Caddy/Nginx), prefer NOT publishing the port publicly.
+    # For local-only bind, keep 127.0.0.1.
+    ports:
+      - "${KUMA_BIND_IP:-127.0.0.1}:${KUMA_PORT:-3001}:3001"
+
+    environment:
+      TZ: ${TZ:-Europe/Zagreb}
+
+      # Keep explicit: lets Kuma know it's containerized (documented by upstream)
+      UPTIME_KUMA_IN_CONTAINER: "1"
+
+      # Optional server args (uncomment if you know why you're changing them)
+      # UPTIME_KUMA_HOST: ${KUMA_HOST:-::}
+      # UPTIME_KUMA_PORT: ${KUMA_PORT_INTERNAL:-3001}
+
+      # (Optional) External DB config (v2). Enable with --profile mariadb and uncomment these.
+      # UPTIME_KUMA_DB_TYPE: mariadb
+      # UPTIME_KUMA_DB_HOSTNAME: kuma-mariadb
+      # UPTIME_KUMA_DB_PORT: 3306
+      # UPTIME_KUMA_DB_NAME: ${KUMA_DB_NAME}
+      # UPTIME_KUMA_DB_USERNAME: ${KUMA_DB_USER}
+      # UPTIME_KUMA_DB_PASSWORD: /run/secrets/kuma_db_password
+
+      # Optional: Cloudflare Tunnel token – store as a secret, not plaintext (uncomment to use)
+      # UPTIME_KUMA_CLOUDFLARED_TOKEN: /run/secrets/cloudflared_token
+
+      # Optional: Kuma internal TLS (usually unnecessary behind a reverse proxy)
+      # UPTIME_KUMA_SSL_KEY: /run/secrets/kuma_ssl_key
+      # UPTIME_KUMA_SSL_CERT: /run/secrets/kuma_ssl_cert
+      # UPTIME_KUMA_SSL_KEY_PASSPHRASE: /run/secrets/kuma_ssl_key_passphrase
+
+    volumes:
+      - uptime-kuma-data:/app/data
+
+    # Blunt truth: mounting the Docker socket gives this container near-root on the host.
+    # Only enable if you accept the risk.
+    # volumes:
+    #   - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    networks:
+      - kuma_internal
+      - proxy
+      - monitoring
+
+    # Uses the image-provided healthcheck binary
+    healthcheck:
+      test: ["CMD", "extra/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 6
+      start_period: 30s
+
+    # Basic hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    # Optional Traefik labels (enable via .env)
+    labels:
+      - "traefik.enable=${TRAEFIK_ENABLE:-false}"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-proxy}"
+      - "traefik.http.routers.kuma.rule=Host(`${KUMA_FQDN:-kuma.local}`)"
+      - "traefik.http.routers.kuma.entrypoints=${TRAEFIK_ENTRYPOINTS:-websecure}"
+      - "traefik.http.routers.kuma.tls=${TRAEFIK_TLS:-true}"
+      - "traefik.http.services.kuma.loadbalancer.server.port=3001"
+      # Optional: middleware for basic auth in front of the UI
+      # - "traefik.http.routers.kuma.middlewares=kuma-auth@docker"
+      # - "traefik.http.middlewares.kuma-auth.basicauth.usersfile=/run/secrets/traefik_basicauth_users"
+
+  # Optional: MariaDB for Uptime Kuma v2 (enable with --profile mariadb)
+  kuma-mariadb:
+    image: mariadb:11
+    container_name: kuma-mariadb
+    profiles: ["mariadb"]
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max-connections=200
+    environment:
+      TZ: ${TZ:-Europe/Zagreb}
+      MARIADB_DATABASE: ${KUMA_DB_NAME:-uptime_kuma}
+      MARIADB_USER: ${KUMA_DB_USER:-uptime_kuma}
+      MARIADB_PASSWORD_FILE: /run/secrets/kuma_db_password
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/kuma_db_root_password
+    secrets:
+      - kuma_db_password
+      - kuma_db_root_password
+    volumes:
+      - kuma-mariadb-data:/var/lib/mysql
+    networks:
+      - kuma_internal
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mariadb-admin ping -h 127.0.0.1 -u$$MARIADB_USER -p$$(cat /run/secrets/kuma_db_password) --silent"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # Optional: Prometheus (scrapes /metrics) (enable with --profile metrics)
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: kuma-prometheus
+    profiles: ["metrics"]
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "${PROM_BIND_IP:-127.0.0.1}:${PROM_PORT:-9090}:9090"
+    networks:
+      - monitoring
+
+volumes:
+  uptime-kuma-data:
+  kuma-mariadb-data:
+  prometheus-data:
+
+secrets:
+  kuma_db_password:
+    file: ./secrets/kuma_db_password.txt
+  kuma_db_root_password:
+    file: ./secrets/kuma_db_root_password.txt
+  # cloudflared_token:
+  #   file: ./secrets/cloudflared_token.txt
+  # kuma_ssl_key:
+  #   file: ./secrets/tls.key
+  # kuma_ssl_cert:
+  #   file: ./secrets/tls.crt
+  # kuma_ssl_key_passphrase:
+  #   file: ./secrets/tls_passphrase.txt
+
+networks:
+  kuma_internal:
+    internal: true
+  monitoring:
+    name: ${MONITORING_NETWORK:-monitoring}
+    driver: bridge
+  proxy:
+    name: ${TRAEFIK_NETWORK:-proxy}
+    external: true

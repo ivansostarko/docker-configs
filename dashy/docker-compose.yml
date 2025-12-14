@@ -1,0 +1,82 @@
+services:
+  dashy:
+    image: ${DASHY_IMAGE:-lissy93/dashy:latest}
+    container_name: ${DASHY_CONTAINER_NAME:-dashy}
+    hostname: ${DASHY_HOSTNAME:-dashy}
+    restart: unless-stopped
+    init: true
+
+    # If you are NOT using a reverse proxy, uncomment ports.
+    # ports:
+    #   - "${DASHY_PORT:-8080}:8080"
+
+    environment:
+      NODE_ENV: "production"
+      TZ: ${TZ:-Europe/Zagreb}
+
+      # Optional HTTP Basic Auth at the Dashy layer (NOT a perimeter security control)
+      # - Only use for extra friction on trusted networks.
+      ENABLE_HTTP_AUTH: ${DASHY_ENABLE_HTTP_AUTH:-false}
+      BASIC_AUTH_USERNAME: ${DASHY_BASIC_AUTH_USERNAME:-}
+      BASIC_AUTH_PASSWORD: ${DASHY_BASIC_AUTH_PASSWORD:-}
+
+    volumes:
+      # Persist all user data (including conf.yml)
+      - ./data/user-data:/app/user-data
+
+    healthcheck:
+      test: ["CMD", "node", "/app/services/healthcheck"]
+      interval: 1m30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    networks:
+      - dashy_internal
+      - proxy
+
+    labels:
+      # Traefik (optional)
+      - "traefik.enable=${TRAEFIK_ENABLE:-false}"
+      - "traefik.http.routers.dashy.rule=Host(`${DASHY_FQDN:-dashy.local}`)"
+      - "traefik.http.routers.dashy.entrypoints=${TRAEFIK_ENTRYPOINTS:-websecure}"
+      - "traefik.http.routers.dashy.tls=${TRAEFIK_TLS:-true}"
+      - "traefik.http.services.dashy.loadbalancer.server.port=8080"
+      # Optional: attach an auth middleware you define in Traefik's file provider
+      # - "traefik.http.routers.dashy.middlewares=${TRAEFIK_MIDDLEWARES:-}"
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # Autoheal (optional): restarts containers marked unhealthy
+  # High-trust requirement: mounts the Docker socket
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: autoheal
+    restart: unless-stopped
+    profiles: ["ops"]
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: "all"
+      AUTOHEAL_INTERVAL: "30"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - dashy_internal
+
+networks:
+  dashy_internal:
+    driver: bridge
+    internal: true
+
+  # External proxy network (Traefik typically lives here)
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:-proxy}

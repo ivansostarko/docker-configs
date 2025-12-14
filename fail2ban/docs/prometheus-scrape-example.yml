@@ -1,0 +1,12 @@
+# Example Prometheus scrape config
+# (Assumes exporter is reachable on the host at ${F2B_EXPORTER_PORT}.)
+
+scrape_configs:
+  - job_name: 'fail2ban'
+    metrics_path: /metrics
+    basic_auth:
+      username: metrics
+      password: <PUT_PASSWORD_HERE>
+    static_configs:
+      - targets:
+          - 'YOUR_HOSTNAME_OR_IP:9191'

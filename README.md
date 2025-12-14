@@ -50,11 +50,18 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [Kibana](/kibana/README.md)
 - [Logstash](/logstash/README.md)
 
-### BI
+### Analytics / BI
 - [Metabase](/metabase/README.md)
+- [Ma](https://redash.io/)
+https://matomo.org/pricing/
+
 
 ### Status Page
 - [Cachet Hq](/cachethq/README.md)
+- [Uptime Kuma](/uptime-kuma/README.md)
+
+### Admin Dashboard
+- [Dashy](/dashy/README.md)
 
 ### Admin Tools
 - [Portainer](/portainer/README.md)
@@ -117,6 +124,7 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 ### Email
 - [Postal](/postal/README.md)
 - [Mailhog](/mailhog/README.md)
+- [Posteio](/posteio/README.md)
 
 ### AI Tools
 - [Ollama](/ollama/README.md)
@@ -136,6 +144,8 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 
 ### Secrets Management
 - [Infisical](/infisical/README.md)
+- [Fail2ban](/fail2ban/README.md)
+
 
 ### Auth
 - [Keycloak](/keycloak/README.md)
@@ -151,6 +161,9 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 - [Postgres Backup](/postgres-backup/README.md)
 - [MongoDB Backup](/mongodb-backup/README.md)
 - [Bacula Backup](/bacula-backup/README.md)
+- [Databack Backup](/databack/README.md)
+
+
 
 ### Metrics / Prometheus Exporters
 | Service       | Exporter       | Grafana Dashboard | Alert Manager | Prometheus Job | fdf |

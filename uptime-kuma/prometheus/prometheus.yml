@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: uptime-kuma
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["uptime-kuma:3001"]
+
+    # If you keep basic auth on /metrics, configure it here:
+    # basic_auth:
+    #   username: "metrics"
+    #   password: "change-me"

@@ -1,0 +1,21 @@
+pageInfo:
+  title: "Home"
+  description: "Dashy"
+
+appConfig:
+  theme: "colorful"
+  layout: "auto"
+  iconSize: "medium"
+  statusCheck: true
+
+  # Prevent casual UI edits writing to disk unless you truly want it
+  allowConfigEdit: false
+
+sections:
+  - name: "Infrastructure"
+    icon: "fas fa-server"
+    items:
+      - title: "Traefik"
+        url: "https://traefik.example.com"
+      - title: "Grafana"
+        url: "https://grafana.example.com"

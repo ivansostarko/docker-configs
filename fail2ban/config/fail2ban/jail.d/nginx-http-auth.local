@@ -1,0 +1,8 @@
+[nginx-http-auth]
+# Example jail for nginx basic-auth failures.
+# Enable only if you mount nginx logs into /remotelogs/nginx/.
+enabled = false
+port    = http,https
+
+# Mount the nginx log DIRECTORY into /remotelogs/nginx (recommended), then point at a file.
+logpath = /remotelogs/nginx/error.log

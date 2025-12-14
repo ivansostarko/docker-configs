@@ -1,0 +1,9 @@
+[sshd]
+enabled = true
+port = ssh
+
+# Debian/Ubuntu:
+logpath = /var/log/auth.log
+
+# RHEL/CentOS alternative (comment the above and use this):
+# logpath = /var/log/secure

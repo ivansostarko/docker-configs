@@ -1,0 +1,159 @@
+version: "3.9"
+
+name: posteio
+
+x-poste-common: &poste-common
+  image: analogic/poste.io:latest
+  hostname: ${POSTE_HOSTNAME}
+  tty: true
+  restart: unless-stopped
+  stop_grace_period: 2m
+  ulimits:
+    nofile:
+      soft: 65536
+      hard: 65536
+  environment:
+    TZ: ${TZ}
+    # Optional Poste.io toggles
+    HTTP_PORT: ${POSTE_HTTP_PORT}
+    HTTPS_PORT: ${POSTE_HTTPS_PORT}
+    DISABLE_CLAMAV: ${POSTE_DISABLE_CLAMAV}
+    DISABLE_RSPAMD: ${POSTE_DISABLE_RSPAMD}
+    DISABLE_ROUNDCUBE: ${POSTE_DISABLE_ROUNDCUBE}
+    # Optional: offload logs/search to Elasticsearch (format: host:port)
+    ELASTICSEARCH: ${POSTE_ELASTICSEARCH}
+  volumes:
+    # Stores users, mailboxes, logs, certificates, settings (backup this)
+    - ${POSTE_DATA_DIR}:/data
+  logging:
+    driver: json-file
+    options:
+      max-size: "25m"
+      max-file: "10"
+  healthcheck:
+    # Basic liveness: SMTP (25) + HTTPS (443) sockets open inside the container
+    test: ["CMD-SHELL", "timeout 5 bash -lc '</dev/tcp/127.0.0.1/25' && timeout 5 bash -lc '</dev/tcp/127.0.0.1/443'"]
+    interval: 30s
+    timeout: 10s
+    retries: 6
+    start_period: 90s
+
+services:
+  # =========================
+  # Poste.io (recommended)
+  # =========================
+  poste:
+    <<: *poste-common
+    container_name: poste
+    # Poste.io strongly prefers host networking on Linux for correct mail behavior.
+    network_mode: host
+    # In host networking mode, Docker "ports:" are ignored (the container binds host ports directly).
+
+  # =========================
+  # Poste.io (bridge-mode alternative)
+  # Use ONLY if you cannot use host networking.
+  # Enable with: docker compose --profile bridge up -d
+  # =========================
+  poste_bridge:
+    <<: *poste-common
+    container_name: poste_bridge
+    profiles: ["bridge"]
+    network_mode: bridge
+    environment:
+      TZ: ${TZ}
+      HTTP_PORT: ${POSTE_HTTP_PORT}
+      HTTPS_PORT: ${POSTE_HTTPS_PORT}
+      DISABLE_CLAMAV: ${POSTE_DISABLE_CLAMAV}
+      DISABLE_RSPAMD: ${POSTE_DISABLE_RSPAMD}
+      DISABLE_ROUNDCUBE: ${POSTE_DISABLE_ROUNDCUBE}
+      ELASTICSEARCH: ${POSTE_ELASTICSEARCH}
+      # Reverse-proxy scenario: disable forced HTTPS redirect if terminating TLS upstream.
+      HTTPS: ${POSTE_HTTPS_REDIRECT_MODE}
+    ports:
+      - "25:25"     # SMTP
+      - "80:80"     # HTTP (also used for ACME/Let's Encrypt challenges)
+      - "443:443"   # HTTPS
+      - "110:110"   # POP3
+      - "143:143"   # IMAP
+      - "465:465"   # SMTPS (legacy)
+      - "587:587"   # Submission (STARTTLS)
+      - "993:993"   # IMAPS
+      - "995:995"   # POP3S
+      - "4190:4190" # Sieve
+    networks:
+      - poste_bridge_net
+
+  # =========================
+  # Optional: Elasticsearch (Poste supports ELASTICSEARCH=host:port)
+  # Enable with: docker compose --profile elastic up -d
+  # =========================
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    container_name: poste_elasticsearch
+    profiles: ["elastic"]
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms${ES_HEAP:-512m} -Xmx${ES_HEAP:-512m}
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    networks:
+      - poste_bridge_net
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9200 >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+
+  # =========================
+  # Optional Metrics: blackbox exporter + Prometheus
+  # Poste.io does not expose a documented native /metrics endpoint; this provides SLI reachability probes.
+  # Enable with: docker compose --profile monitoring up -d
+  # =========================
+  blackbox:
+    image: prom/blackbox-exporter:v0.28.0
+    container_name: poste_blackbox
+    profiles: ["monitoring"]
+    command:
+      - "--config.file=/etc/blackbox/blackbox.yml"
+    volumes:
+      - ./configs/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    # To probe a host-network Poste instance on 127.0.0.1, blackbox should also use host networking.
+    network_mode: host
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9115/-/healthy >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 6
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: poste_prometheus
+    profiles: ["monitoring"]
+    volumes:
+      - ./configs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      # Lets Prometheus reach services bound on the Docker host (Linux).
+      - "host.docker.internal:host-gateway"
+    networks:
+      - poste_monitoring_net
+    restart: unless-stopped
+
+networks:
+  poste_bridge_net:
+    driver: bridge
+  poste_monitoring_net:
+    driver: bridge
+
+volumes:
+  es_data:
+  prom_data:

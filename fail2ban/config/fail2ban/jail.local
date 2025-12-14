@@ -1,0 +1,23 @@
+[DEFAULT]
+# Conservative defaults; tune per jail
+bantime  = 1h
+findtime = 10m
+maxretry = 5
+
+# If you are protecting services running on the HOST, you typically need:
+#   chain = INPUT
+# If you are protecting Docker-published ports, you may need DOCKER-USER
+# or an action that targets that chain.
+chain = INPUT
+
+# Choose ONE based on your firewall backend
+# banaction = nftables-multiport
+banaction = iptables-multiport
+
+# Adjust to your environment
+ignoreip = 127.0.0.1/8 ::1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+
+# Backend: auto works if you're reading text log files.
+# If your system logs only to journald and not to /var/log/*,
+# you must forward logs to files or mount an alternative log source.
+backend = auto

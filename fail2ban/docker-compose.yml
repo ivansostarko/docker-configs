@@ -1,0 +1,105 @@
+services:
+  fail2ban:
+    image: lscr.io/linuxserver/fail2ban:latest
+    container_name: fail2ban
+
+    # Host-level banning requires the host network namespace.
+    network_mode: host
+
+    # Required for iptables/nftables manipulation.
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ}
+      VERBOSITY: ${F2B_VERBOSITY:-}
+
+    volumes:
+      # Persistent config (LinuxServer image stores Fail2Ban config under /config)
+      - ./config:/config
+
+      # Host logs (read-only). Adjust to your distro/logging approach.
+      - /var/log:/var/log:ro
+
+      # Optional: mount application logs under /remotelogs/<app>/ (read-only)
+      - ${REMOTELOGS_ROOT:-./remotelogs}:/remotelogs:ro
+
+      # Fail2Ban socket directory (shared with exporter)
+      - f2b_run:/var/run/fail2ban
+
+      # Optional: some hosts need module visibility for iptables/nft tooling
+      - /lib/modules:/lib/modules:ro
+
+    healthcheck:
+      test: ["CMD-SHELL", "fail2ban-client ping | grep -qi pong"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional: Prometheus exporter (jail status, bans, failures)
+  # Project: hctrdev/fail2ban-prometheus-exporter
+  fail2ban_exporter:
+    image: registry.gitlab.com/hctrdev/fail2ban-prometheus-exporter:latest
+    container_name: fail2ban-exporter
+    depends_on:
+      - fail2ban
+
+    ports:
+      - "${F2B_EXPORTER_PORT:-9191}:9191"
+
+    volumes:
+      # Mount the directory, not the sock file (sock can be recreated on restart).
+      - f2b_run:/var/run/fail2ban:ro
+
+    secrets:
+      - exporter_basic_auth_user
+      - exporter_basic_auth_pass
+
+    environment:
+      # Exporter flags are also supported; env vars are convenient in Compose.
+      F2B_WEB_LISTEN_ADDRESS: ":9191"
+      F2B_COLLECTOR_SOCKET: "/var/run/fail2ban/fail2ban.sock"
+
+    # Enable basic auth without leaking creds into env or git.
+    command:
+      - /bin/sh
+      - -lc
+      - |
+        export F2B_WEB_BASICAUTH_USER="$(cat /run/secrets/exporter_basic_auth_user)";
+        export F2B_WEB_BASICAUTH_PASS="$(cat /run/secrets/exporter_basic_auth_pass)";
+        exec /fail2ban_exporter
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9191/metrics | grep -q '^f2b_up '"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+    restart: unless-stopped
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  f2b_run:
+
+secrets:
+  exporter_basic_auth_user:
+    file: ./secrets/exporter_basic_auth_user.txt
+  exporter_basic_auth_pass:
+    file: ./secrets/exporter_basic_auth_pass.txt

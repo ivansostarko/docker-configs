@@ -1,0 +1,8 @@
+# Secrets
+/secrets/*.txt
+
+# Optional remote logs directory
+/remotelogs/
+
+# Local overrides
+*.local.override
