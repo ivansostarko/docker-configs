@@ -1,0 +1,5 @@
+.env
+secrets/*.txt
+terraform/state/*
+terraform/.terraform/*
+**/.DS_Store

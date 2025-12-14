@@ -1,0 +1,206 @@
+name: terraform-stack
+
+services:
+  # ------------------------
+  # Terraform CLI (local runner)
+  # ------------------------
+  terraform:
+    image: hashicorp/terraform:1.14.2
+    working_dir: /workspace/terraform
+    entrypoint: ["/bin/sh", "/usr/local/bin/terraform-entrypoint.sh"]
+    env_file:
+      - .env
+    environment:
+      TF_PLUGIN_CACHE_DIR: /workspace/.terraform.d/plugin-cache
+      TF_IN_AUTOMATION: "true"
+    volumes:
+      - ./terraform:/workspace/terraform:rw
+      - terraform_plugin_cache:/workspace/.terraform.d/plugin-cache
+      - terraform_state:/workspace/terraform/state
+      - ./docker/terraform/terraform-entrypoint.sh:/usr/local/bin/terraform-entrypoint.sh:ro
+    secrets:
+      - cloudflare_api_token
+    networks:
+      - tf-net
+    healthcheck:
+      test: ["CMD-SHELL", "terraform version >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  # ------------------------
+  # HCP Terraform / Terraform Cloud Agents
+  # ------------------------
+  tfc-agent-1:
+    image: hashicorp/tfc-agent:latest
+    entrypoint: ["/bin/sh", "/usr/local/bin/agent-entrypoint.sh"]
+    env_file:
+      - .env
+    environment:
+      TFC_AGENT_NAME: ${TFC_AGENT_1_NAME:-agent-1}
+      TFC_ADDRESS: ${TFC_ADDRESS:-https://app.terraform.io}
+      TFC_AGENT_AUTO_UPDATE: ${TFC_AGENT_AUTO_UPDATE:-patch}
+      # Optional: enable extra agent capabilities (e.g., set to "query")
+      TFE_AGENT_ACCEPT: ${TFE_AGENT_ACCEPT:-}
+    volumes:
+      - tfc_agent_1_cache:/home/tfc-agent/.terraform.d/plugin-cache
+      - ./docker/tfc-agent/agent-entrypoint.sh:/usr/local/bin/agent-entrypoint.sh:ro
+      # Optional: allow agent-run Terraform to manage local Docker resources (Docker provider).
+      # This is a privileged capability on the host; only enable if you need it.
+      # - /var/run/docker.sock:/var/run/docker.sock
+    secrets:
+      - source: tfc_agent_token_1
+        target: tfc_agent_token
+    networks:
+      - tf-net
+    healthcheck:
+      test: ["CMD-SHELL", "ps -ef | grep -q '[t]fc-agent'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  tfc-agent-2:
+    image: hashicorp/tfc-agent:latest
+    entrypoint: ["/bin/sh", "/usr/local/bin/agent-entrypoint.sh"]
+    env_file:
+      - .env
+    environment:
+      TFC_AGENT_NAME: ${TFC_AGENT_2_NAME:-agent-2}
+      TFC_ADDRESS: ${TFC_ADDRESS:-https://app.terraform.io}
+      TFC_AGENT_AUTO_UPDATE: ${TFC_AGENT_AUTO_UPDATE:-patch}
+      TFE_AGENT_ACCEPT: ${TFE_AGENT_ACCEPT:-}
+    volumes:
+      - tfc_agent_2_cache:/home/tfc-agent/.terraform.d/plugin-cache
+      - ./docker/tfc-agent/agent-entrypoint.sh:/usr/local/bin/agent-entrypoint.sh:ro
+      # - /var/run/docker.sock:/var/run/docker.sock
+    secrets:
+      - source: tfc_agent_token_2
+        target: tfc_agent_token
+    networks:
+      - tf-net
+    healthcheck:
+      test: ["CMD-SHELL", "ps -ef | grep -q '[t]fc-agent'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  tfc-agent-3:
+    image: hashicorp/tfc-agent:latest
+    entrypoint: ["/bin/sh", "/usr/local/bin/agent-entrypoint.sh"]
+    env_file:
+      - .env
+    environment:
+      TFC_AGENT_NAME: ${TFC_AGENT_3_NAME:-agent-3}
+      TFC_ADDRESS: ${TFC_ADDRESS:-https://app.terraform.io}
+      TFC_AGENT_AUTO_UPDATE: ${TFC_AGENT_AUTO_UPDATE:-patch}
+      TFE_AGENT_ACCEPT: ${TFE_AGENT_ACCEPT:-}
+    volumes:
+      - tfc_agent_3_cache:/home/tfc-agent/.terraform.d/plugin-cache
+      - ./docker/tfc-agent/agent-entrypoint.sh:/usr/local/bin/agent-entrypoint.sh:ro
+      # - /var/run/docker.sock:/var/run/docker.sock
+    secrets:
+      - source: tfc_agent_token_3
+        target: tfc_agent_token
+    networks:
+      - tf-net
+    healthcheck:
+      test: ["CMD-SHELL", "ps -ef | grep -q '[t]fc-agent'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  # ------------------------
+  # Observability profile (optional)
+  # ------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: ["metrics"]
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - tf-net
+    restart: unless-stopped
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    profiles: ["metrics"]
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    networks:
+      - tf-net
+    restart: unless-stopped
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    profiles: ["metrics"]
+    ports:
+      - "${CADVISOR_PORT:-8080}:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - tf-net
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    profiles: ["metrics"]
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - tf-net
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+networks:
+  tf-net:
+    name: terraform-net
+    driver: bridge
+
+volumes:
+  terraform_plugin_cache:
+  terraform_state:
+  tfc_agent_1_cache:
+  tfc_agent_2_cache:
+  tfc_agent_3_cache:
+  prometheus_data:
+  grafana_data:
+
+secrets:
+  cloudflare_api_token:
+    file: ./secrets/cloudflare_api_token.txt
+  tfc_agent_token_1:
+    file: ./secrets/tfc_agent_token_1.txt
+  tfc_agent_token_2:
+    file: ./secrets/tfc_agent_token_2.txt
+  tfc_agent_token_3:
+    file: ./secrets/tfc_agent_token_3.txt
