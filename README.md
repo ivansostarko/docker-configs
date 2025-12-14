@@ -64,7 +64,7 @@ A small, opinionated collection of Docker and Docker Compose configurations inte
 
 ### Admin Tools
 - [Portainer](/portainer/README.md)
-- [Kafka Admin](/kafka-akhq/README.md)
+- [Kafka Admin](/kafka-admin/README.md)
 - [Portainer](/portainer/README.md)
 - [Wireguard Admin](/wireguard-admin/README.md)
 - [Redis Admin](/redis-admin/README.md)
