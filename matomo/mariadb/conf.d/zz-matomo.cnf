@@ -1,0 +1,9 @@
+[mysqld]
+max_allowed_packet=64M
+innodb_buffer_pool_size=256M
+innodb_log_file_size=128M
+innodb_flush_method=O_DIRECT
+skip_name_resolve=ON
+
+character-set-server=utf8mb4
+collation-server=utf8mb4_unicode_ci

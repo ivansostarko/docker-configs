@@ -1,0 +1,244 @@
+name: matomo
+
+services:
+  mariadb:
+    image: mariadb:11.4
+    container_name: matomo-mariadb
+    command:
+      - --max-allowed-packet=64M
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-name-resolve=1
+    environment:
+      TZ: ${TZ}
+      MARIADB_DATABASE: ${MARIADB_DATABASE}
+      MARIADB_USER: ${MARIADB_USER}
+      MARIADB_PASSWORD_FILE: /run/secrets/mariadb_password
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/mariadb_root_password
+    secrets:
+      - mariadb_password
+      - mariadb_root_password
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./mariadb/conf.d:/etc/mysql/conf.d:ro
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -uroot -p$$(cat /run/secrets/mariadb_root_password) --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    restart: unless-stopped
+
+  matomo:
+    build:
+      context: ./matomo
+      dockerfile: Dockerfile
+      args:
+        MATOMO_IMAGE: ${MATOMO_IMAGE}
+    container_name: matomo-app
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ}
+
+      # Matomo DB bootstrap
+      MATOMO_DATABASE_HOST: mariadb
+      MATOMO_DATABASE_ADAPTER: ${MATOMO_DATABASE_ADAPTER}
+      MATOMO_DATABASE_TABLES_PREFIX: ${MATOMO_DATABASE_TABLES_PREFIX}
+      MATOMO_DATABASE_USERNAME: ${MARIADB_USER}
+      MATOMO_DATABASE_DBNAME: ${MARIADB_DATABASE}
+
+      # Loaded from secret file by wrapper entrypoint
+      MATOMO_DATABASE_PASSWORD_FILE: /run/secrets/mariadb_password
+
+      # Optional PHP tuning (supported by the upstream image)
+      PHP_MEMORY_LIMIT: ${PHP_MEMORY_LIMIT}
+      PHP_MAX_EXECUTION_TIME: ${PHP_MAX_EXECUTION_TIME}
+      PHP_POST_MAX_SIZE: ${PHP_POST_MAX_SIZE}
+      PHP_UPLOAD_MAX_FILESIZE: ${PHP_UPLOAD_MAX_FILESIZE}
+    secrets:
+      - mariadb_password
+      - matomo_salt
+    volumes:
+      - matomo_data:/var/www/html
+    networks:
+      - internal
+      - proxy
+    expose:
+      - "9000"
+    healthcheck:
+      test: ["CMD-SHELL", "php-fpm -t >/dev/null 2>&1 && pidof php-fpm >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: matomo-nginx
+    depends_on:
+      matomo:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT}:80"
+    volumes:
+      - matomo_data:/var/www/html:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/snippets:/etc/nginx/snippets:ro
+    networks:
+      - proxy
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/matomo.php >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # Cron-style archiving loop (recommended for performance)
+  matomo-cron:
+    build:
+      context: ./matomo
+      dockerfile: Dockerfile
+      args:
+        MATOMO_IMAGE: ${MATOMO_IMAGE}
+    container_name: matomo-cron
+    depends_on:
+      nginx:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ}
+      MATOMO_ARCHIVE_URL: ${MATOMO_ARCHIVE_URL}
+      ARCHIVE_FREQUENCY_MINUTES: ${ARCHIVE_FREQUENCY_MINUTES}
+      CONCURRENT_ARCHIVERS: ${CONCURRENT_ARCHIVERS}
+    volumes:
+      - matomo_data:/var/www/html
+    networks:
+      - internal
+      - proxy
+    entrypoint: ["/usr/local/bin/matomo-archive-loop"]
+    restart: unless-stopped
+
+  # -----------------------------
+  # Optional monitoring profile
+  # -----------------------------
+  mysqld-exporter:
+    image: prom/mysqld-exporter:v0.16.0
+    container_name: matomo-mysqld-exporter
+    profiles: ["monitoring"]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    secrets:
+      - mysqld_exporter_my_cnf
+    command: ["--config.my-cnf=/run/secrets/mysqld_exporter_my_cnf"]
+    networks:
+      - internal
+    ports:
+      - "${MYSQLD_EXPORTER_PORT}:9104"
+    restart: unless-stopped
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.26.0
+    container_name: matomo-blackbox-exporter
+    profiles: ["monitoring"]
+    volumes:
+      - ./monitoring/blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    command: ["--config.file=/etc/blackbox_exporter/config.yml"]
+    networks:
+      - proxy
+      - internal
+    ports:
+      - "${BLACKBOX_EXPORTER_PORT}:9115"
+    restart: unless-stopped
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.2
+    container_name: matomo-cadvisor
+    profiles: ["monitoring"]
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+    networks:
+      - internal
+    ports:
+      - "${CADVISOR_PORT}:8080"
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: matomo-prometheus
+    profiles: ["monitoring"]
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION}
+    networks:
+      - internal
+      - proxy
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    container_name: matomo-grafana
+    profiles: ["monitoring"]
+    depends_on:
+      prometheus:
+        condition: service_started
+    environment:
+      TZ: ${TZ}
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD_FILE: /run/secrets/grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    secrets:
+      - grafana_admin_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - internal
+      - proxy
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    restart: unless-stopped
+
+networks:
+  internal:
+    name: matomo_internal
+    driver: bridge
+    internal: true
+  proxy:
+    name: matomo_proxy
+    driver: bridge
+
+volumes:
+  mariadb_data:
+  matomo_data:
+  prometheus_data:
+  grafana_data:
+
+secrets:
+  mariadb_password:
+    file: ./secrets/mariadb_password.txt
+  mariadb_root_password:
+    file: ./secrets/mariadb_root_password.txt
+  matomo_salt:
+    file: ./secrets/matomo_salt.txt
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password.txt
+  mysqld_exporter_my_cnf:
+    file: ./secrets/mysqld_exporter_my.cnf

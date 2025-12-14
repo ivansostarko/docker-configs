@@ -1,0 +1,37 @@
+#!/usr/bin/env sh
+set -eu
+
+ARCHIVE_URL="${MATOMO_ARCHIVE_URL:-http://nginx/}"
+FREQ_MIN="${ARCHIVE_FREQUENCY_MINUTES:-5}"
+CONC="${CONCURRENT_ARCHIVERS:-1}"
+
+echo "[archiver] Starting Matomo archiving loop"
+echo "[archiver] URL: ${ARCHIVE_URL}"
+echo "[archiver] Frequency (minutes): ${FREQ_MIN}"
+echo "[archiver] Concurrency: ${CONC}"
+
+run_archive() {
+  # Matomo console location is inside the mounted /var/www/html volume
+  if [ ! -x "/var/www/html/console" ]; then
+    echo "[archiver] ERROR: /var/www/html/console not found or not executable (is Matomo installed yet?)"
+    return 1
+  fi
+
+  # Use php to run archiving; force all sites
+  php /var/www/html/console core:archive --url="${ARCHIVE_URL}" --force-all-websites --quiet
+}
+
+# Initial delay to avoid racing installer
+sleep 10
+
+while true; do
+  echo "[archiver] Running archive at $(date -Is)"
+  i=1
+  while [ "$i" -le "$CONC" ]; do
+    ( run_archive ) &
+    i=$((i+1))
+  done
+  wait || true
+  echo "[archiver] Done. Sleeping ${FREQ_MIN} minutes."
+  sleep "$((FREQ_MIN * 60))"
+done
